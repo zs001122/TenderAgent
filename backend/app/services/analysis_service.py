@@ -1,13 +1,11 @@
 import json
 import re
-import pandas as pd
-from typing import Dict, List, Any, Optional
+from typing import Dict, List, Any
 from openai import OpenAI
-import os
 
-# ==========================================
-# 1. 基础信息提取层 (Rule-based Extraction)
-# ==========================================
+from app.core.config import settings
+
+
 class TenderInfoExtractor:
     def __init__(self):
         self.keywords_map = {
@@ -62,9 +60,7 @@ class TenderInfoExtractor:
                     break
         return list(tags)
 
-# ==========================================
-# 2. 模拟 LLM 智能分析层 (Real LLM Analysis)
-# ==========================================
+
 class LLMAnalyzer:
     def __init__(self, api_key: str, base_url: str, model: str):
         self.client = OpenAI(api_key=api_key, base_url=base_url)
@@ -95,12 +91,12 @@ class LLMAnalyzer:
             response = self.client.chat.completions.create(
                 model=self.model,
                 messages=[
-                     {"role": "system", "content": system_prompt},
-                     {"role": "user", "content": f"招标公告内容：\n{tender_text}"}
-                 ],
-                 temperature=0.3,
-                 max_tokens=4096
-             )
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": f"招标公告内容：\n{tender_text}"}
+                ],
+                temperature=0.3,
+                max_tokens=4096
+            )
             
             content = response.choices[0].message.content
             content = re.sub(r'<think>.*?</think>', '', content, flags=re.DOTALL)
@@ -127,9 +123,7 @@ class LLMAnalyzer:
                 "summary": f"API调用出错: {str(e)[:50]}..."
             }
 
-# ==========================================
-# 3. 商机匹配引擎 (Matching Engine)
-# ==========================================
+
 class MatchingEngine:
     def __init__(self, company_profile: Dict):
         self.company = company_profile
@@ -159,8 +153,8 @@ class MatchingEngine:
         
         tags = tender_info.get('tags', [])
         if "软件开发" in tags or "大数据" in tags or "AI/人工智能" in tags:
-             score += 30
-             reasons.append("具备相关技术资质")
+            score += 30
+            reasons.append("具备相关技术资质")
         
         recommendation = "不推荐"
         if score >= 80:
@@ -174,24 +168,25 @@ class MatchingEngine:
             "match_details": reasons
         }
 
-# ==========================================
-# 4. Service Orchestrator
-# ==========================================
+
 class AnalysisService:
     def __init__(self):
         self.extractor = TenderInfoExtractor()
         
-        # Configuration
-        self.llm_api_key = "sk-claDrMA1TOAB0p5UGXyezm05S3qNhHXdB4OUzhqO7r5hh0X8"
-        self.llm_base_url = "https://apie.zhisuaninfo.com/v1"
-        self.llm_model = "gpt-oss-120b"
+        self.llm_api_key = settings.LLM_API_KEY
+        self.llm_base_url = settings.LLM_BASE_URL
+        self.llm_model = settings.LLM_MODEL
         
-        self.llm_analyzer = LLMAnalyzer(api_key=self.llm_api_key, base_url=self.llm_base_url, model=self.llm_model)
+        self.llm_analyzer = LLMAnalyzer(
+            api_key=self.llm_api_key,
+            base_url=self.llm_base_url,
+            model=self.llm_model
+        )
         
         self.my_company = {
             "name": "天网智能科技",
             "target_domains": ["大数据", "AI/人工智能", "软件开发", "通信/网络"],
-            "budget_range": [50, 2000], 
+            "budget_range": [50, 2000],
             "qualifications": ["CMMI3", "高新技术企业"]
         }
         self.matcher = MatchingEngine(self.my_company)
@@ -202,15 +197,12 @@ class AnalysisService:
         if not content or len(content) < 10:
             content = clean_title
             
-        # Step 1: Rule-based Extraction
         budget = self.extractor.extract_budget(content)
         deadline = self.extractor.extract_deadline(content)
         tags = self.extractor.extract_keywords(content + " " + clean_title)
         
-        # Step 2: LLM Analysis
         llm_result = self.llm_analyzer.analyze_with_llm(content[:1000])
         
-        # Step 3: Matching Score
         tender_info = {
             "budget": budget,
             "tags": tags,
@@ -231,8 +223,9 @@ class AnalysisService:
             "match_result": match_result
         }
 
-# Singleton
+
 _service_instance = None
+
 def get_analysis_service():
     global _service_instance
     if _service_instance is None:
