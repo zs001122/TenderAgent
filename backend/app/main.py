@@ -3,15 +3,19 @@ from fastapi.middleware.cors import CORSMiddleware
 import os
 import sys
 
-# Ensure backend directory is in path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.api.v1.api import api_router
-from app.db.repository import get_repository
+from app.db.session import init_db, engine
+from sqlmodel import Session
 
-app = FastAPI(title="Tender Opportunity Mining System API")
 
-# Configure CORS
+app = FastAPI(
+    title="招标商机挖掘系统 API",
+    description="抓取 → 提取 → 匹配 → 推荐 完整流程",
+    version="1.0.0"
+)
+
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -20,18 +24,33 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Include API router
 app.include_router(api_router, prefix="/api")
 
+
 @app.on_event("startup")
-async def startup_event():
-    # Initialize repository
-    repo = get_repository()
-    print(f"Repository initialized with {repo.count_tenders()} tenders.")
+def on_startup():
+    init_db()
+    with Session(engine) as session:
+        from app.db.repository import TenderRepository
+        repo = TenderRepository(session)
+        count = repo.count_tenders()
+        print(f"数据库初始化完成，当前招标数量: {count}")
+
 
 @app.get("/")
 def root():
-    return {"message": "Welcome to Tender Opportunity Mining System API"}
+    return {
+        "message": "招标商机挖掘系统 API",
+        "version": "1.0.0",
+        "docs": "/docs",
+        "endpoints": {
+            "tenders": "/api/tenders/",
+            "analysis": "/api/analysis/",
+            "dashboard": "/api/dashboard/",
+            "company": "/api/company/",
+        }
+    }
+
 
 if __name__ == "__main__":
     import uvicorn
