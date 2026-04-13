@@ -48,6 +48,7 @@ def root():
             "analysis": "/api/analysis/",
             "dashboard": "/api/dashboard/",
             "company": "/api/company/",
+            "feedback": "/api/feedback/",
         }
     }
 

@@ -1,6 +1,6 @@
 from sqlmodel import Session, select, func, or_
 from typing import List, Dict, Optional, Any
-from datetime import datetime
+from datetime import datetime, timedelta
 import json
 
 from app.models.tender import Tender, CrawlLog
@@ -15,7 +15,57 @@ class TenderRepository:
     def get_tenders(self, skip: int = 0, limit: int = 20) -> List[Dict]:
         statement = select(Tender).order_by(Tender.publish_date.desc()).offset(skip).limit(limit)
         results = self.session.exec(statement).all()
-        return [self._to_dict(t) for t in results]
+        tender_ids = [item.id for item in results if item.id is not None]
+        latest_analysis_map = self._get_latest_analysis_map(tender_ids)
+        items: List[Dict[str, Any]] = []
+        for tender in results:
+            tender_dict = self._to_dict(tender)
+            analysis_dict = latest_analysis_map.get(tender.id) if tender.id else None
+            if analysis_dict:
+                tender_dict["match_score"] = analysis_dict.get("match_score")
+                tender_dict["match_grade"] = analysis_dict.get("match_grade")
+                tender_dict["recommendation"] = analysis_dict.get("recommendation")
+            else:
+                tender_dict["match_score"] = None
+                tender_dict["match_grade"] = None
+                tender_dict["recommendation"] = None
+            items.append(tender_dict)
+        return items
+
+    def get_tender_overview(self) -> Dict[str, int]:
+        """看板总览（全量统计，不受分页影响）"""
+        total = int(self.count_tenders() or 0)
+        analyzed_count = int(
+            self.session.exec(
+                select(func.count(func.distinct(AnalysisResult.tender_id)))
+            ).one()
+            or 0
+        )
+        pending_count = max(total - analyzed_count, 0)
+
+        latest_subquery = (
+            select(
+                AnalysisResult.tender_id.label("tender_id"),
+                func.max(AnalysisResult.id).label("latest_id"),
+            )
+            .group_by(AnalysisResult.tender_id)
+            .subquery()
+        )
+        strong_recommended_count = int(
+            self.session.exec(
+                select(func.count(AnalysisResult.id))
+                .join(latest_subquery, AnalysisResult.id == latest_subquery.c.latest_id)
+                .where(AnalysisResult.recommendation == "强烈推荐")
+            ).one()
+            or 0
+        )
+
+        return {
+            "total": total,
+            "analyzed": analyzed_count,
+            "pending": pending_count,
+            "strong_recommended": strong_recommended_count,
+        }
 
     def get_tender_by_id(self, tender_id: int) -> Optional[Tender]:
         return self.session.get(Tender, tender_id)
@@ -86,12 +136,37 @@ class TenderRepository:
         return result
 
     def get_analysis_by_tender_id(self, tender_id: int) -> Optional[AnalysisResult]:
-        statement = select(AnalysisResult).where(AnalysisResult.tender_id == tender_id)
+        statement = (
+            select(AnalysisResult)
+            .where(AnalysisResult.tender_id == tender_id)
+            .order_by(AnalysisResult.created_at.desc())
+        )
         return self.session.exec(statement).first()
 
     def get_analysis_result(self, tender_id: int) -> Optional[Dict]:
         analysis = self.get_analysis_by_tender_id(tender_id)
         return self._analysis_to_dict(analysis) if analysis else None
+
+    def _get_latest_analysis_map(self, tender_ids: List[int]) -> Dict[int, Dict[str, Any]]:
+        if not tender_ids:
+            return {}
+        latest_subquery = (
+            select(
+                AnalysisResult.tender_id.label("tender_id"),
+                func.max(AnalysisResult.id).label("latest_id"),
+            )
+            .where(AnalysisResult.tender_id.in_(tender_ids))
+            .group_by(AnalysisResult.tender_id)
+            .subquery()
+        )
+        latest_analyses = self.session.exec(
+            select(AnalysisResult).join(latest_subquery, AnalysisResult.id == latest_subquery.c.latest_id)
+        ).all()
+        return {
+            int(item.tender_id): self._analysis_to_dict(item)
+            for item in latest_analyses
+            if item.tender_id is not None
+        }
 
     def get_all_analysis_results(self, skip: int = 0, limit: int = 100) -> List[Dict]:
         statement = (
@@ -140,6 +215,60 @@ class TenderRepository:
             "high_value_count": high_value_count,
             "total_budget_wanyuan": total_budget,
             "top_tags": []
+        }
+
+    def get_crawler_health_stats(self, hours: int = 24) -> Dict[str, Any]:
+        """抓取链路健康指标（默认近 24 小时）"""
+        since = datetime.utcnow() - timedelta(hours=max(hours, 1))
+
+        recent_logs_stmt = select(CrawlLog).where(CrawlLog.start_time >= since)
+        recent_logs = self.session.exec(recent_logs_stmt).all()
+        total_runs = len(recent_logs)
+        success_runs = sum(1 for item in recent_logs if str(item.status).upper() == "SUCCESS")
+        failed_runs = sum(1 for item in recent_logs if str(item.status).upper() == "FAILED")
+        total_new_count = sum(int(item.new_count or 0) for item in recent_logs)
+
+        durations = [
+            (item.end_time - item.start_time).total_seconds()
+            for item in recent_logs
+            if item.end_time and item.start_time
+        ]
+        avg_duration_seconds = round(sum(durations) / len(durations), 2) if durations else 0.0
+        success_rate = round((success_runs / total_runs), 4) if total_runs > 0 else 0.0
+
+        pending_analysis_stmt = (
+            select(func.count(Tender.id))
+            .where(Tender.id.not_in(select(AnalysisResult.tender_id).distinct()))
+        )
+        pending_analysis_count = self.session.exec(pending_analysis_stmt).one()
+
+        latest_log = self.session.exec(
+            select(CrawlLog).order_by(CrawlLog.start_time.desc()).limit(1)
+        ).first()
+
+        return {
+            "window_hours": max(hours, 1),
+            "since": since.isoformat(),
+            "runs": {
+                "total": total_runs,
+                "success": success_runs,
+                "failed": failed_runs,
+                "success_rate": success_rate,
+                "avg_duration_seconds": avg_duration_seconds,
+            },
+            "ingest": {
+                "new_tenders": total_new_count,
+            },
+            "analysis": {
+                "pending_count": int(pending_analysis_count or 0),
+            },
+            "latest_run": {
+                "source_site": latest_log.source_site if latest_log else None,
+                "status": latest_log.status if latest_log else None,
+                "start_time": latest_log.start_time.isoformat() if latest_log and latest_log.start_time else None,
+                "end_time": latest_log.end_time.isoformat() if latest_log and latest_log.end_time else None,
+                "new_count": int(latest_log.new_count or 0) if latest_log else 0,
+            },
         }
 
     def _to_dict(self, tender: Tender) -> Dict:
@@ -235,11 +364,21 @@ class CompanyRepository:
 
 def get_repository():
     from app.db.session import get_session
-    session = next(get_session())
-    return TenderRepository(session)
+    session_gen = get_session()
+    session = next(session_gen)
+    try:
+        yield TenderRepository(session)
+    finally:
+        session.close()
+        session_gen.close()
 
 
 def get_company_repository():
     from app.db.session import get_session
-    session = next(get_session())
-    return CompanyRepository(session)
+    session_gen = get_session()
+    session = next(session_gen)
+    try:
+        yield CompanyRepository(session)
+    finally:
+        session.close()
+        session_gen.close()

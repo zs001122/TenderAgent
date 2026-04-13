@@ -69,6 +69,29 @@ class PipelineService:
                 print(f"处理招标 {tender_id} 失败: {e}")
         return results
 
+    def process_batch_detailed(self, tender_ids: List[int]) -> Dict[str, Any]:
+        """批量处理招标（返回成功/失败明细）"""
+        success_ids: List[int] = []
+        failed_items: List[Dict[str, Any]] = []
+
+        for tender_id in tender_ids:
+            try:
+                result = self.process_tender(tender_id)
+                if result:
+                    success_ids.append(tender_id)
+                    continue
+                failed_items.append({"tender_id": tender_id, "reason": "招标不存在或分析失败"})
+            except Exception as exc:
+                failed_items.append({"tender_id": tender_id, "reason": str(exc)})
+
+        return {
+            "total": len(tender_ids),
+            "success": len(success_ids),
+            "failed": len(failed_items),
+            "success_ids": success_ids,
+            "failed_items": failed_items,
+        }
+
     def process_unanalyzed(self, limit: int = 100) -> Dict[str, Any]:
         """处理未分析的招标"""
         tenders = self.tender_repo.get_tenders_without_analysis(limit)

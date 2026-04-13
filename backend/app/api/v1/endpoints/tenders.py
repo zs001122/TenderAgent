@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
+from fastapi import APIRouter, Depends, HTTPException
 from typing import List, Any, Dict, Optional
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.db.repository import get_repository, TenderRepository, get_company_repository, CompanyRepository
 from app.db.session import get_session
@@ -11,13 +11,19 @@ router = APIRouter()
 
 
 class AnalyzeRequest(BaseModel):
-    tender_ids: List[int]
+    tender_ids: List[int] = Field(default_factory=list, alias="tenderIds")
+
+    class Config:
+        allow_population_by_field_name = True
 
 
 class BatchAnalyzeResponse(BaseModel):
     total: int
-    processed: int
-    tender_ids: List[int]
+    success: int
+    failed: int
+    success_ids: List[int]
+    failed_items: List[Dict[str, Any]]
+    retryable_ids: List[int]
 
 
 class CompanyProfileUpdate(BaseModel):
@@ -39,7 +45,8 @@ def read_tenders(
     total = repo.count_tenders()
     return {
         "total": total,
-        "items": tenders
+        "items": tenders,
+        "summary": repo.get_tender_overview(),
     }
 
 
@@ -71,16 +78,20 @@ def analyze_tender(
 @router.post("/analyze-batch", response_model=BatchAnalyzeResponse)
 def analyze_batch(
     request: AnalyzeRequest,
-    background_tasks: BackgroundTasks,
     session = Depends(get_session)
 ):
     """批量分析招标"""
+    if not request.tender_ids:
+        raise HTTPException(status_code=400, detail="tender_ids 不能为空")
     service = PipelineService(session)
-    results = service.process_batch(request.tender_ids)
+    details = service.process_batch_detailed(request.tender_ids)
     return BatchAnalyzeResponse(
-        total=len(request.tender_ids),
-        processed=len(results),
-        tender_ids=request.tender_ids
+        total=details["total"],
+        success=details["success"],
+        failed=details["failed"],
+        success_ids=details["success_ids"],
+        failed_items=details["failed_items"],
+        retryable_ids=[item["tender_id"] for item in details["failed_items"]],
     )
 
 

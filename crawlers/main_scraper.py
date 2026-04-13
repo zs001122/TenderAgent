@@ -35,10 +35,47 @@ def get_last_publish_date(session: Session, source_site: str) -> datetime:
     result = session.exec(statement).first()
     return result
 
-def run_scrapers():
-    scrapers = [
-        ChinaMobileScraper(),
-    ]
+def _build_scrapers(scraper_targets=None):
+    factories = {
+        "cmcc": ChinaMobileScraper,
+        "telecom": ChinaTelecomScraper,
+    }
+    if not scraper_targets:
+        scraper_targets = ["cmcc"]
+        if ChinaTelecomScraper is not None:
+            scraper_targets.append("telecom")
+    resolved = []
+    for target in scraper_targets:
+        key = str(target).strip().lower()
+        if key not in factories:
+            logger.warning(f"Unknown scraper target: {target}")
+            continue
+        factory = factories[key]
+        if factory is None:
+            logger.warning(f"Scraper target unavailable: {target}")
+            continue
+        if key == "telecom" and ChinaTelecomScraper is None:
+            logger.warning("ChinaTelecomScraper unavailable, skipped.")
+            continue
+        if key == "cmcc" and ChinaMobileScraper is None:
+            logger.warning("ChinaMobileScraper unavailable, skipped.")
+            continue
+        resolved.append(factory())
+    return resolved
+
+def run_scrapers(max_pages: int = 2, scraper_targets=None):
+    scrapers = _build_scrapers(scraper_targets)
+    summary = {
+        "total_scrapers": len(scrapers),
+        "success": 0,
+        "failed": 0,
+        "new_count": 0,
+        "details": [],
+    }
+
+    if not scrapers:
+        logger.warning("No scraper available to run.")
+        return summary
 
     with Session(engine) as session:
         for scraper in scrapers:
@@ -57,7 +94,7 @@ def run_scrapers():
 
             new_count = 0
             try:
-                for tender_data in scraper.run(max_pages=2, last_publish_date=last_date):
+                for tender_data in scraper.run(max_pages=max_pages, last_publish_date=last_date):
                     url = tender_data.get("source_url")
                     if not url:
                         continue
@@ -77,17 +114,26 @@ def run_scrapers():
 
                 session.commit()
                 log_entry.status = "SUCCESS"
+                summary["success"] += 1
                 
             except Exception as e:
                 logger.error(f"Error running scraper {scraper.name}: {e}", exc_info=True)
                 log_entry.status = "FAILED"
                 session.rollback()
+                summary["failed"] += 1
             finally:
                 log_entry.end_time = datetime.now()
                 log_entry.new_count = new_count
                 session.add(log_entry)
                 session.commit()
                 logger.info(f"Finished {scraper.name}. Added {new_count} new tenders. Status: {log_entry.status}")
+                summary["new_count"] += new_count
+                summary["details"].append({
+                    "source_site": scraper.name,
+                    "status": log_entry.status,
+                    "new_count": new_count,
+                })
+    return summary
 
 if __name__ == "__main__":
     logger.info("Starting master scraper orchestrator...")

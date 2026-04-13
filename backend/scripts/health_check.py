@@ -1,5 +1,20 @@
 import sys
+import json
 from pathlib import Path
+
+
+def _build_crawler_metrics(root: Path) -> dict:
+    backend_dir = root / "backend"
+    if str(backend_dir) not in sys.path:
+        sys.path.insert(0, str(backend_dir))
+
+    from sqlmodel import Session  # type: ignore
+    from app.db.session import engine  # type: ignore
+    from app.db.repository import TenderRepository  # type: ignore
+
+    with Session(engine) as session:
+        repo = TenderRepository(session)
+        return repo.get_crawler_health_stats(hours=24)
 
 
 def main() -> int:
@@ -18,6 +33,11 @@ def main() -> int:
             print(item)
         return 1
     print("health_check_ok")
+    try:
+        metrics = _build_crawler_metrics(root)
+        print(json.dumps({"crawler_health": metrics}, ensure_ascii=False))
+    except Exception as exc:
+        print(f"crawler_health_collect_failed: {exc}")
     return 0
 
 

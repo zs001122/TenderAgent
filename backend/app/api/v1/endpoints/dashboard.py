@@ -12,3 +12,12 @@ def get_dashboard_stats(
     Get dashboard statistics.
     """
     return repo.get_stats()
+
+
+@router.get("/crawler-health", response_model=Dict[str, Any])
+def get_crawler_health(
+    hours: int = 24,
+    repo: TenderRepository = Depends(get_repository),
+):
+    """获取抓取链路健康指标。"""
+    return repo.get_crawler_health_stats(hours=hours)

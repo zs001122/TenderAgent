@@ -1,0 +1,48 @@
+name: ci
+
+on:
+  push:
+    branches: ["**"]
+  pull_request:
+
+jobs:
+  backend-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r backend/requirements.txt
+      - name: Run backend tests
+        run: pytest backend/tests
+
+  frontend-build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: frontend/package-lock.json
+      - name: Install frontend dependencies
+        run: npm ci
+        working-directory: frontend
+      - name: Build frontend
+        run: npm run build
+        working-directory: frontend
+
+  structure-drift:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Check structure and links
+        run: |
+          python -c "from pathlib import Path; import re,sys; root=Path('.').resolve(); req=[Path('memory.md'),Path('docs'),Path('docs/plans'),Path('docs/dev-logs'),Path('docs/plans/01_extraction_pipeline.md'),Path('docs/plans/02_matching_engine.md'),Path('docs/plans/03_agent_system.md'),Path('docs/plans/04_feedback_learning.md'),Path('docs/plans/05_knowledge_graph.md'),Path('docs/plans/06_crawler_system.md'),Path('docs/plans/07_frontend_system.md'),Path('.trae'),Path('.trae/documents')]; miss=[str(p) for p in req if not (root/p).exists()]; link=re.compile(r'\\]\\(([^)]+)\\)'); broken=[]; md=[p for p in [root/'memory.md',*root.glob('docs/**/*.md')] if p.exists()]; [broken.append(f'{f.relative_to(root)} -> {m.group(1)}') for f in md for m in link.finditer(f.read_text(encoding='utf-8')) if ('://' not in m.group(1).strip() and not m.group(1).strip().startswith('#') and not m.group(1).strip().startswith('mailto:') and ((lambda u: u and not ((f.parent/u).resolve()).exists())(m.group(1).strip().split('#',1)[0].strip())))]; [print('MISSING\\n- '+'\\n- '.join(miss)) if miss else None, print('BROKEN_LINKS\\n- '+'\\n- '.join(broken)) if broken else None]; sys.exit(1 if miss or broken else 0)"
