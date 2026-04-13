@@ -39,11 +39,14 @@ TenderAgent/
 
 ## 文档索引
 
+- 当前计划板：`.trae/documents/current_plan_board.md`
 - 总规划文档：`.trae/documents/tender_system_implementation_plan.md`
 - MVP 进度与下一步计划：`.trae/documents/mvp_progress_and_next_steps_plan_2026-04-02.md`
 - 模块子规划：`docs/plans/*.md`
 - 模块开发记录：`docs/dev-logs/*.md`
 - 全局开发日志：`memory.md`
+
+说明：日常查看项目当前状态时，优先参考“当前计划板”与 `memory.md`；旧阶段性规划文档保留作背景参考。
 
 ## 本地启动
 
@@ -70,21 +73,21 @@ cd /home/wushuxin/TenderAgent/backend
 python scripts/create_test_data.py
 ```
 
-### 3.1) 抓取→增量入库→分析 一次跑通
+### 3.1) 抓取→增量入库 一次跑通（不自动分析）
 
 ```bash
 cd /home/wushuxin/TenderAgent
-/home/wushuxin/TenderAgent/venv/bin/python backend/scripts/run_data_pipeline.py --mode once --scrapers cmcc,telecom --max-pages 2 --analyze-limit 200
+/home/wushuxin/TenderAgent/venv/bin/python backend/scripts/run_data_pipeline.py --mode once --scrapers cmcc,telecom --max-pages 2
 ```
 
-### 3.2) 每日定时抓取与分析（守护模式）
+### 3.2) 每日定时抓取（守护模式，不自动分析）
 
 ```bash
 cd /home/wushuxin/TenderAgent
-/home/wushuxin/TenderAgent/venv/bin/python backend/scripts/run_data_pipeline.py --mode daemon --time 02:00 --scrapers cmcc,telecom --max-pages 2 --analyze-limit 500
+/home/wushuxin/TenderAgent/venv/bin/python backend/scripts/run_data_pipeline.py --mode daemon --time 02:00 --scrapers cmcc,telecom --max-pages 2
 ```
 
-说明：数据抓取管道统一使用项目虚拟环境 Python 运行（`venv/bin/python`），当前不配置 `systemd` 服务文件。
+说明：数据抓取管道统一使用项目虚拟环境 Python 运行（`venv/bin/python`），当前不配置 `systemd` 服务文件；分析改为手动触发（前端“重新分析”或相关分析 API）。
 
 ### 3.3) 抓取链路健康指标
 

@@ -5,6 +5,7 @@ import json
 
 from app.models.tender import Tender, CrawlLog
 from app.models.analysis import AnalysisResult
+from app.models.analysis_trace import AnalysisTrace
 from app.models.company import CompanyProfile
 
 
@@ -134,6 +135,12 @@ class TenderRepository:
         self.session.commit()
         self.session.refresh(result)
         return result
+
+    def save_analysis_trace(self, trace: AnalysisTrace) -> AnalysisTrace:
+        self.session.add(trace)
+        self.session.commit()
+        self.session.refresh(trace)
+        return trace
 
     def get_analysis_by_tender_id(self, tender_id: int) -> Optional[AnalysisResult]:
         statement = (
@@ -268,6 +275,47 @@ class TenderRepository:
                 "start_time": latest_log.start_time.isoformat() if latest_log and latest_log.start_time else None,
                 "end_time": latest_log.end_time.isoformat() if latest_log and latest_log.end_time else None,
                 "new_count": int(latest_log.new_count or 0) if latest_log else 0,
+            },
+        }
+
+    def get_analysis_mode_stats(self, hours: int = 24) -> Dict[str, Any]:
+        """分析执行模式统计（Agent/Fallback 命中率）"""
+        since = datetime.utcnow() - timedelta(hours=max(hours, 1))
+        traces = self.session.exec(
+            select(AnalysisTrace).where(AnalysisTrace.created_at >= since)
+        ).all()
+
+        total = len(traces)
+        agent_count = sum(1 for t in traces if t.selected_mode == "agent")
+        fallback_count = sum(1 for t in traces if t.fallback_used)
+        rule_count = sum(1 for t in traces if t.selected_mode == "rule")
+        success_count = sum(1 for t in traces if t.success)
+        error_total = sum(int(t.error_count or 0) for t in traces)
+        avg_duration_ms = round(
+            sum(int(t.duration_ms or 0) for t in traces) / total, 2
+        ) if total else 0.0
+
+        def _ratio(v: int) -> float:
+            return round(v / total, 4) if total else 0.0
+
+        return {
+            "window_hours": max(hours, 1),
+            "since": since.isoformat(),
+            "counts": {
+                "total": total,
+                "success": success_count,
+                "agent": agent_count,
+                "rule": rule_count,
+                "fallback": fallback_count,
+                "error_total": error_total,
+            },
+            "rates": {
+                "success_rate": _ratio(success_count),
+                "agent_rate": _ratio(agent_count),
+                "fallback_rate": _ratio(fallback_count),
+            },
+            "performance": {
+                "avg_duration_ms": avg_duration_ms,
             },
         }
 

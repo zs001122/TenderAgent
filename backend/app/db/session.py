@@ -16,6 +16,7 @@ def create_db_and_tables():
     from app.models.analysis import AnalysisResult
     from app.models.company import CompanyProfile
     from app.models.feedback import BidRecord, FeedbackAnalysis
+    from app.models.analysis_trace import AnalysisTrace
     
     SQLModel.metadata.create_all(engine)
 

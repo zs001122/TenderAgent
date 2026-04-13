@@ -2,12 +2,17 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime
 from sqlmodel import Session
 import json
+import time
 
 from app.models.tender import Tender
 from app.models.analysis import AnalysisResult
+from app.models.analysis_trace import AnalysisTrace
 from app.models.company import CompanyProfile
+from app.core.config import settings
 from app.db.repository import TenderRepository, CompanyRepository
 from app.services.extraction.pipeline import InformationFusionPipeline
+from app.services.extraction.models import ExtractionResult
+from app.services.extraction.agent_extractor import AgentExtractionService
 from app.services.matching.matching_engine import MatchingEngine
 from app.agents.orchestrator import OrchestratorAgent
 
@@ -26,11 +31,14 @@ class PipelineService:
             self.company_profile = self.company_repo.get_profile_dict()
         
         self.extraction_pipeline = InformationFusionPipeline()
+        self.agent_extractor = AgentExtractionService()
+        self.extraction_mode = str(settings.EXTRACTION_MODE or "hybrid").strip().lower()
         self.matching_engine = MatchingEngine(self.company_profile)
         self.orchestrator = OrchestratorAgent()
 
     def process_tender(self, tender_id: int) -> Optional[AnalysisResult]:
         """处理单个招标：提取 → 匹配 → 推荐"""
+        started = time.perf_counter()
         tender = self.tender_repo.get_tender_by_id(tender_id)
         if not tender:
             return None
@@ -38,7 +46,7 @@ class PipelineService:
         if not tender.content:
             return self._create_empty_analysis(tender_id, "招标内容为空")
         
-        extraction_result = self.extraction_pipeline.extract(tender.content)
+        extraction_result, mode_meta = self._extract_with_mode(tender.content, tender.title)
         
         extraction_dict = self._extraction_to_dict(extraction_result.info)
         self.tender_repo.update_extraction_result(tender_id, extraction_dict)
@@ -55,7 +63,118 @@ class PipelineService:
             orchestrator_result=orchestrator_result
         )
         
-        return self.tender_repo.save_analysis_result(analysis)
+        saved = self.tender_repo.save_analysis_result(analysis)
+        duration_ms = int((time.perf_counter() - started) * 1000)
+        self.tender_repo.save_analysis_trace(
+            AnalysisTrace(
+                tender_id=tender_id,
+                configured_mode=self.extraction_mode,
+                selected_mode=str(mode_meta.get("selected_mode", "rule")),
+                fallback_used=bool(mode_meta.get("fallback_used", False)),
+                success=bool(extraction_result.success),
+                error_count=len(extraction_result.errors or []),
+                duration_ms=duration_ms,
+                created_at=datetime.utcnow(),
+            )
+        )
+        return saved
+
+    def debug_extraction(self, tender_id: int) -> Optional[Dict[str, Any]]:
+        """返回当前招标在配置模式下的抽取调试信息。"""
+        tender = self.tender_repo.get_tender_by_id(tender_id)
+        if not tender:
+            return None
+        if not tender.content:
+            return {
+                "tender_id": tender_id,
+                "configured_mode": self.extraction_mode,
+                "selected_mode": "none",
+                "fallback_used": False,
+                "success": False,
+                "errors": ["招标内容为空"],
+                "warnings": [],
+                "extraction": {},
+            }
+
+        configured_mode = self.extraction_mode
+        selected_mode = "rule"
+        fallback_used = False
+
+        if configured_mode == "rule":
+            result = self.extraction_pipeline.extract(tender.content)
+            selected_mode = "rule"
+        elif configured_mode == "agent":
+            agent_result = self.agent_extractor.extract(tender.content, title=tender.title)
+            if agent_result.success:
+                result = agent_result
+                selected_mode = "agent"
+            else:
+                result = self.extraction_pipeline.extract(tender.content)
+                selected_mode = "rule_fallback"
+                fallback_used = True
+                result.warnings.append("agent_extract_failed_fallback_rule")
+                result.errors.extend(agent_result.errors)
+        else:
+            agent_result = self.agent_extractor.extract(tender.content, title=tender.title)
+            if agent_result.success:
+                result = agent_result
+                selected_mode = "agent"
+            else:
+                result = self.extraction_pipeline.extract(tender.content)
+                selected_mode = "rule_fallback"
+                fallback_used = True
+                result.warnings.append("agent_extract_failed_fallback_rule")
+                result.errors.extend(agent_result.errors)
+
+        return {
+            "tender_id": tender_id,
+            "configured_mode": configured_mode,
+            "selected_mode": selected_mode,
+            "fallback_used": fallback_used,
+            "success": result.success,
+            "errors": result.errors,
+            "warnings": result.warnings,
+            "extraction": self._extraction_to_dict(result.info),
+        }
+
+    def _extract_with_mode(self, content: str, title: str) -> tuple[ExtractionResult, Dict[str, Any]]:
+        mode = self.extraction_mode
+        if mode == "rule":
+            return self.extraction_pipeline.extract(content), {
+                "selected_mode": "rule",
+                "fallback_used": False,
+            }
+
+        if mode == "agent":
+            agent_result = self.agent_extractor.extract(content, title=title)
+            if agent_result.success:
+                return agent_result, {
+                    "selected_mode": "agent",
+                    "fallback_used": False,
+                }
+            # agent-only 模式失败时兜底，避免主流程中断
+            fallback = self.extraction_pipeline.extract(content)
+            fallback.warnings.append("agent_extract_failed_fallback_rule")
+            fallback.errors.extend(agent_result.errors or [])
+            return fallback, {
+                "selected_mode": "rule_fallback",
+                "fallback_used": True,
+            }
+
+        # hybrid: 优先 Agent，失败回退 Rule
+        agent_result = self.agent_extractor.extract(content, title=title)
+        if agent_result.success:
+            return agent_result, {
+                "selected_mode": "agent",
+                "fallback_used": False,
+            }
+        fallback = self.extraction_pipeline.extract(content)
+        fallback.warnings.append("agent_extract_failed_fallback_rule")
+        fallback.errors.extend(agent_result.errors or [])
+        return fallback, {
+            "selected_mode": "rule_fallback",
+            "fallback_used": True,
+        }
 
     def process_batch(self, tender_ids: List[int]) -> List[AnalysisResult]:
         """批量处理招标"""

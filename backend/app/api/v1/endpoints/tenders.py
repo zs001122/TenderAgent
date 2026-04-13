@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Any, Dict, Optional
 from pydantic import BaseModel, Field
 
@@ -65,6 +65,7 @@ def read_tender(
 @router.post("/{tender_id}/analyze", response_model=Dict[str, Any])
 def analyze_tender(
     tender_id: int,
+    debug: bool = Query(default=False, description="是否返回抽取调试元信息"),
     session = Depends(get_session)
 ):
     """触发单个招标分析"""
@@ -72,7 +73,20 @@ def analyze_tender(
     result = service.process_tender(tender_id)
     if not result:
         raise HTTPException(status_code=404, detail="招标不存在或分析失败")
-    return service.get_full_analysis(tender_id)
+    full_result = service.get_full_analysis(tender_id)
+    if not full_result:
+        raise HTTPException(status_code=404, detail="分析结果不存在")
+    if debug:
+        debug_info = service.debug_extraction(tender_id) or {}
+        full_result["debug_meta"] = {
+            "configured_mode": debug_info.get("configured_mode"),
+            "selected_mode": debug_info.get("selected_mode"),
+            "fallback_used": debug_info.get("fallback_used"),
+            "success": debug_info.get("success"),
+            "errors": debug_info.get("errors", []),
+            "warnings": debug_info.get("warnings", []),
+        }
+    return full_result
 
 
 @router.post("/analyze-batch", response_model=BatchAnalyzeResponse)
@@ -116,6 +130,19 @@ def get_tender_analysis(
     result = service.get_full_analysis(tender_id)
     if not result:
         raise HTTPException(status_code=404, detail="分析结果不存在")
+    return result
+
+
+@router.get("/{tender_id}/analysis-debug", response_model=Dict[str, Any])
+def get_tender_analysis_debug(
+    tender_id: int,
+    session = Depends(get_session)
+):
+    """获取抽取模式调试信息（agent/rule/fallback）。"""
+    service = PipelineService(session)
+    result = service.debug_extraction(tender_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="招标不存在")
     return result
 
 

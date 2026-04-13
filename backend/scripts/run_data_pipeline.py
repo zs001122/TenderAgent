@@ -13,13 +13,10 @@ if backend_dir not in sys.path:
 if crawlers_dir not in sys.path:
     sys.path.insert(0, crawlers_dir)
 
-from sqlmodel import Session
-from app.db.session import engine
-from app.services.pipeline_service import PipelineService
 from main_scraper import run_scrapers
 
 
-def run_once(max_pages: int, analyze_limit: int, scraper_targets, run_analysis: bool):
+def run_once(max_pages: int, scraper_targets):
     started_at = datetime.now().isoformat()
     scrape_summary = run_scrapers(max_pages=max_pages, scraper_targets=scraper_targets)
     if scrape_summary.get("total_scrapers", 0) == 0:
@@ -27,14 +24,9 @@ def run_once(max_pages: int, analyze_limit: int, scraper_targets, run_analysis: 
         print("[pipeline] hint: pip install -r crawlers/requirements.txt && playwright install chromium")
 
     analysis_summary = {
-        "total": 0,
-        "processed": 0,
-        "tender_ids": [],
+        "mode": "manual_only",
+        "message": "analysis is disabled in data pipeline, trigger manually via API/UI",
     }
-    if run_analysis:
-        with Session(engine) as session:
-            service = PipelineService(session)
-            analysis_summary = service.process_unanalyzed(limit=analyze_limit)
 
     result = {
         "started_at": started_at,
@@ -55,7 +47,7 @@ def seconds_until(target_hhmm: str) -> int:
     return int((target - now).total_seconds())
 
 
-def run_daemon(target_time: str, max_pages: int, analyze_limit: int, scraper_targets, run_analysis: bool):
+def run_daemon(target_time: str, max_pages: int, scraper_targets):
     while True:
         wait_seconds = seconds_until(target_time)
         print(f"[pipeline] next run at {target_time}, waiting {wait_seconds}s")
@@ -63,9 +55,7 @@ def run_daemon(target_time: str, max_pages: int, analyze_limit: int, scraper_tar
         try:
             run_once(
                 max_pages=max_pages,
-                analyze_limit=analyze_limit,
                 scraper_targets=scraper_targets,
-                run_analysis=run_analysis,
             )
         except Exception as exc:
             print(f"[pipeline] run failed: {exc}")
@@ -82,27 +72,20 @@ def main():
     parser.add_argument("--mode", choices=["once", "daemon"], default="once")
     parser.add_argument("--time", default="02:00")
     parser.add_argument("--max-pages", type=int, default=2)
-    parser.add_argument("--analyze-limit", type=int, default=200)
     parser.add_argument("--scrapers", default="cmcc,telecom")
-    parser.add_argument("--skip-analysis", action="store_true")
     args = parser.parse_args()
 
     targets = parse_targets(args.scrapers)
-    run_analysis = not args.skip_analysis
     if args.mode == "once":
         run_once(
             max_pages=args.max_pages,
-            analyze_limit=args.analyze_limit,
             scraper_targets=targets,
-            run_analysis=run_analysis,
         )
         return
     run_daemon(
         target_time=args.time,
         max_pages=args.max_pages,
-        analyze_limit=args.analyze_limit,
         scraper_targets=targets,
-        run_analysis=run_analysis,
     )
 
 

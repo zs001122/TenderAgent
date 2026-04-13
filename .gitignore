@@ -46,7 +46,9 @@ build/
 *.swp
 *.swo
 .DS_Store
-.trae/
+.trae/*
+!.trae/documents/
+.runtime/
 
 # Project specific
 data/

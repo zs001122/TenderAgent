@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useMemo } from 'react'
-import { Table, Tag, Button, Space, message, Card, Statistic, Row, Col, Input, Segmented, Grid } from 'antd'
-import { EyeOutlined, PlayCircleOutlined, RedoOutlined, LinkOutlined } from '@ant-design/icons'
+import { Table, Tag, Button, Space, message, Card, Statistic, Row, Col, Input, Segmented, Grid, Tooltip } from 'antd'
+import { EyeOutlined, PlayCircleOutlined, RedoOutlined, LinkOutlined, SyncOutlined } from '@ant-design/icons'
 import type { ColumnsType, TablePaginationConfig } from 'antd/es/table'
 import type { Tender, MatchGrade, RecommendationLevel } from '../types/tender'
-import { analyzeBatch, getTenders } from '../services/tender'
+import { analyzeBatch, analyzeTender, getTenders } from '../services/tender'
 import AnalysisDetailModal from '../components/AnalysisDetailModal'
 
 const matchGradeColors: Record<MatchGrade, string> = {
@@ -54,6 +54,7 @@ const TenderList: React.FC = () => {
   const [batchAnalyzing, setBatchAnalyzing] = useState(false)
   const [retrying, setRetrying] = useState(false)
   const [lastFailedIds, setLastFailedIds] = useState<string[]>([])
+  const [reanalyzingIds, setReanalyzingIds] = useState<string[]>([])
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'analyzing' | 'analyzed'>('all')
   const [keyword, setKeyword] = useState('')
 
@@ -138,6 +139,21 @@ const TenderList: React.FC = () => {
     runBatchAnalyze(lastFailedIds, true)
   }
 
+  const handleReanalyze = async (record: Tender) => {
+    const rowId = String(record.id)
+    if (reanalyzingIds.includes(rowId)) return
+    setReanalyzingIds((prev) => [...prev, rowId])
+    try {
+      await analyzeTender(rowId)
+      message.success('已重新分析')
+      await fetchTenders(pagination.current, pagination.pageSize)
+    } catch {
+      message.error('重新分析失败')
+    } finally {
+      setReanalyzingIds((prev) => prev.filter((id) => id !== rowId))
+    }
+  }
+
   const filteredTenders = useMemo(() => {
     return tenders.filter((item) => {
       const statusPass = statusFilter === 'all' ? true : item.status === statusFilter
@@ -217,9 +233,9 @@ const TenderList: React.FC = () => {
     {
       title: '操作',
       key: 'action',
-      width: 84,
+      width: 120,
       render: (_, record) => (
-        <Space>
+        <Space size={4}>
           <Button
             type="link"
             icon={<EyeOutlined />}
@@ -227,6 +243,14 @@ const TenderList: React.FC = () => {
           >
             详情
           </Button>
+          <Tooltip title="重新分析">
+            <Button
+              type="text"
+              icon={<SyncOutlined />}
+              loading={reanalyzingIds.includes(String(record.id))}
+              onClick={() => handleReanalyze(record)}
+            />
+          </Tooltip>
         </Space>
       ),
     },

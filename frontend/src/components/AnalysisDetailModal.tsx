@@ -81,17 +81,26 @@ const AnalysisDetailModal: React.FC<AnalysisDetailModalProps> = ({
     } catch (error: unknown) {
       const status = (error as { response?: { status?: number } })?.response?.status
       if (status === 404) {
-        try {
-          await analyzeTender(String(tenderId))
-          const latest = await getTenderAnalysis(String(tenderId))
-          setData(latest)
-          message.success('已自动完成分析')
-        } catch {
-          message.error('获取分析结果失败')
-        }
+        setData(null)
+        message.info('暂无分析结果，请手动点击“手动分析”')
       } else {
         message.error('获取分析结果失败')
       }
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const handleManualAnalyze = async () => {
+    if (!tenderId) return
+    setLoading(true)
+    try {
+      await analyzeTender(String(tenderId))
+      const latest = await getTenderAnalysis(String(tenderId))
+      setData(latest)
+      message.success('手动分析完成')
+    } catch {
+      message.error('手动分析失败')
     } finally {
       setLoading(false)
     }
@@ -456,7 +465,12 @@ const AnalysisDetailModal: React.FC<AnalysisDetailModalProps> = ({
           />
         ) : (
           <div style={{ textAlign: 'center', padding: 40 }}>
-            <Text type="secondary">暂无分析数据</Text>
+            <Space direction="vertical" size="middle">
+              <Text type="secondary">暂无分析数据</Text>
+              <Button type="primary" onClick={handleManualAnalyze} loading={loading}>
+                手动分析
+              </Button>
+            </Space>
           </div>
         )}
       </Spin>

@@ -472,6 +472,40 @@ python scripts/create_test_data.py
 
 **验证结果**：
 - `pytest -q`：59 passed
+
+### 2026-04-13 - P1-2 启动：抽取质量对比评估脚本
+
+**新增脚本**：
+- `backend/scripts/evaluate_extraction_modes.py`
+  - 支持 `rule/agent/both` 三种评估模式
+  - 输出字段覆盖率、成功率、平均耗时、错误 TopN
+  - 支持 `--agent-timeout`，防止 LLM 超时导致脚本卡住
+
+**当前样本结论（示例）**：
+- Rule 模式：抽取稳定、耗时毫秒级
+- Agent 模式：当前存在超时情况（示例为 `agent_timeout>8s`），导致成功率偏低
+
+**用途**：
+- 作为 Agent 优化阶段的基线工具，用于持续对比 Prompt/模型/网关调整后的质量与性能变化。
+
+### 2026-04-13 - 分析触发策略调整为“仅手动”
+
+**策略变更**：
+- 分析改为仅手动触发，不再由抓取链路自动触发。
+
+**改动点**：
+- `backend/scripts/run_data_pipeline.py`
+  - 移除自动分析流程（不再调用 `process_unanalyzed`）
+  - 脚本仅负责“抓取+增量入库”，分析状态输出为 `manual_only`
+- `frontend/src/components/AnalysisDetailModal.tsx`
+  - 移除 404 场景的自动分析
+  - 新增“手动分析”按钮，由用户显式触发
+- `README.md`
+  - 同步更新数据管道说明，明确“抓取守护不自动分析”
+
+**验证结果**：
+- `python backend/scripts/run_data_pipeline.py --help`：参数已移除自动分析选项
+- `npm run build`：通过
 - `npm run build`：通过
 - `npm run test`（smoke）：通过
 - `python backend/scripts/health_check.py`：health_check_ok
@@ -576,3 +610,81 @@ python scripts/create_test_data.py
 
 **验证结果**：
 - `npm run build`：通过
+
+### 2026-04-13 - 列表看板与稳定性修复（分页/统计/自适应/外链）
+
+**问题与修复**：
+- 修复分页 500：
+  - 根因是 Repository 依赖会话未释放导致 SQLAlchemy QueuePool 耗尽
+  - 更新 `backend/app/db/repository.py`：`get_repository()` 与 `get_company_repository()` 改为 `yield` 依赖并在 `finally` 关闭会话
+- 修复匹配评分与推荐等级不显示：
+  - 更新 `backend/app/db/repository.py`：列表查询合并最新分析结果，补齐 `match_score/match_grade/recommendation`
+- 优化看板统计口径：
+  - 更新 `backend/app/api/v1/endpoints/tenders.py`：`GET /api/tenders/` 增加 `summary`
+  - 更新 `backend/app/db/repository.py`：新增 `get_tender_overview()`（全量统计 total/analyzed/pending/strong_recommended）
+- 优化前端列表自适应与信息密度：
+  - 更新 `frontend/src/pages/TenderList.tsx`：断点响应、列结构压缩、合并日期列、去除强制横向滚动
+  - 合并“匹配评分 + 推荐等级 + 状态”为单列“评估结果”徽章展示
+- 增加公告外链能力：
+  - 更新 `frontend/src/services/tender.ts`、`frontend/src/types/tender.ts` 与 `TenderList.tsx`
+  - 标题支持点击跳转 `source_url`（新窗口）
+
+**视觉重构推进**：
+- 更新 `frontend/src/App.tsx`：顶部看板风格与统一容器
+- 更新 `frontend/src/pages/CompanyProfile.tsx`：分区卡片 + 摘要侧栏
+- 更新 `frontend/src/components/AnalysisDetailModal.tsx`：Tabs 分栏展示
+
+**验证结果**：
+- `pytest -q`：59 passed
+- `npm run build`：通过
+- 已完成 git 提交：`8b8cd20`（本地领先 `origin/main` 1 个提交，待 push）
+
+### 2026-04-13 - Agent 分析链路接入与联调完成
+
+**核心目标**：
+- 将“规则/正则为主”的抽取链路升级为可配置 Agent 抽取（LiteLLM），并保留规则回退保障稳定性。
+
+**后端能力落地**：
+- 新增 `backend/app/services/extraction/agent_extractor.py`（LiteLLM 抽取服务）
+- 更新 `backend/app/services/pipeline_service.py`：
+  - 支持 `EXTRACTION_MODE=rule|agent|hybrid`
+  - `hybrid` 模式优先 Agent，失败回退 Rule
+  - 新增 `debug_extraction()` 输出执行模式与回退信息
+- 更新 `backend/app/api/v1/endpoints/tenders.py`：
+  - 新增 `GET /api/tenders/{id}/analysis-debug`
+  - `POST /api/tenders/{id}/analyze?debug=true` 返回 `debug_meta`
+- 更新 `backend/app/core/config.py` 与 `.env.example`：
+  - 增加 `EXTRACTION_MODE` 配置
+  - 固定读取项目根目录 `.env`
+
+**调试与测试脚本**：
+- 新增 `backend/scripts/test_agent_extraction.py`（连通性 + pipeline 调试）
+- 新增 `backend/scripts/test_llm_connectivity.py`（仅测 LLM 连通）
+
+**问题定位与修复**：
+- 初始未走 Agent 的根因：
+  - 模型 provider 前缀不规范
+  - `LLM_BASE_URL` 使用了 `/chat/completions` 端点路径（需归一化到 `/v1`）
+  - 运行进程环境缺少 `litellm` 或依赖版本冲突
+- 已修复：模型与 base_url 归一化、超时控制、依赖安装与环境读取路径。
+
+**联调结论**：
+- 当前链路可走 Agent，`analysis-debug` 可观测 `selected_mode` 与 `fallback_used`。
+- 多实例并存会导致“前端看起来很快但没走 Agent”的错觉；需确保前端代理指向当前后端端口。
+
+### 2026-04-13 - P1-1 落地：fallback 率统计与指标接口
+
+**实现内容**：
+- 新增 `backend/app/models/analysis_trace.py`（分析执行轨迹表）
+  - 记录字段：`configured_mode`、`selected_mode`、`fallback_used`、`success`、`error_count`、`duration_ms`
+- 更新 `backend/app/services/pipeline_service.py`
+  - `process_tender()` 落库每次分析轨迹
+  - 轨迹包含执行模式与耗时，便于统计 Agent 命中率
+- 更新 `backend/app/db/repository.py`
+  - 新增 `get_analysis_mode_stats(hours)` 统计
+  - 输出 `agent_rate`、`fallback_rate`、`success_rate`、`avg_duration_ms`
+- 更新 `backend/app/api/v1/endpoints/dashboard.py`
+  - 新增 `GET /api/dashboard/analysis-mode-metrics?hours=24`
+
+**验证结果**：
+- `pytest -q`：59 passed
