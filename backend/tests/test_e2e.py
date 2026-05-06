@@ -92,12 +92,13 @@ class TestEndToEnd:
         assert len(extraction_results) == 3
         
         tender_infos = []
+        future_deadline = (datetime.now() + timedelta(days=30)).strftime('%Y-%m-%d')
         for i, result in enumerate(extraction_results):
             tender_infos.append({
                 'title': f'项目{i+1}',
                 'budget': result.info.budget.value if result.info.budget else 0,
                 'region': result.info.region,
-                'deadline': '2026-05-01',
+                'deadline': future_deadline,
                 'qualifications': []
             })
         

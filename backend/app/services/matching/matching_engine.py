@@ -59,6 +59,7 @@ class MatchingEngine:
         if not pass_gate:
             failed = self.gate_filter.get_failed_checks(gate_checks)
             reason = "; ".join([c.reason for c in failed])
+            matching_details = self._build_matching_details(gate_checks, None)
             
             return MatchResult(
                 pass_gate=False,
@@ -69,7 +70,10 @@ class MatchingEngine:
                 score=0.0,
                 grade="D",
                 confidence=1.0,
-                details={'failed_checks': [c.name for c in failed]}
+                details={
+                    'failed_checks': [c.name for c in failed],
+                    **matching_details,
+                }
             )
         
         ranking = self.ranking_engine.calculate_score(tender_info)
@@ -90,9 +94,64 @@ class MatchingEngine:
                 'dimension_scores': {
                     k: {'score': v.score, 'weight': v.weight, 'details': v.details}
                     for k, v in ranking.dimension_scores.items()
-                }
+                },
+                **self._build_matching_details(gate_checks, ranking),
             }
         )
+
+    def _build_matching_details(
+        self,
+        gate_checks: List[GateCheck],
+        ranking: Optional[RankingResult],
+    ) -> Dict[str, Any]:
+        gate_evidence = []
+        for check in gate_checks:
+            status = {
+                GateResult.PASS: "matched",
+                GateResult.FAIL: "missing",
+                GateResult.WARNING: "review",
+            }.get(check.result, "review")
+            gate_evidence.append({
+                "dimension": "硬门槛",
+                "requirement": check.detail or check.name,
+                "status": status,
+                "score_delta": 0,
+                "matched_assets": [],
+                "reason": check.reason,
+                "is_mandatory": check.is_mandatory,
+            })
+
+        dimension_scores = {}
+        evidence_matches = []
+        if ranking:
+            dimension_scores = {
+                key: {
+                    "name": value.name,
+                    "score": value.score,
+                    "weight": value.weight,
+                    "details": value.details,
+                }
+                for key, value in ranking.dimension_scores.items()
+            }
+            evidence_matches = ranking.evidence_matches or []
+
+        missing = [
+            item for item in gate_evidence + evidence_matches
+            if item.get("status") == "missing"
+        ]
+        risks = [
+            item for item in gate_evidence + evidence_matches
+            if item.get("status") in {"review", "weak"}
+        ]
+        return {
+            "matching_details": {
+                "dimension_scores": dimension_scores,
+                "evidence_matches": evidence_matches,
+                "gate_evidence": gate_evidence,
+                "missing_items": missing,
+                "risk_items": risks,
+            }
+        }
     
     def match_batch(self, tenders: List[Dict[str, Any]]) -> List[MatchResult]:
         """批量匹配"""

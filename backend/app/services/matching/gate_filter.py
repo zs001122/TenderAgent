@@ -2,6 +2,9 @@ from dataclasses import dataclass
 from enum import Enum
 from typing import List, Dict, Any, Optional, Set
 from datetime import datetime
+import re
+
+from app.knowledge.qualification_mapping import QualificationMapping
 
 
 class GateResult(Enum):
@@ -36,13 +39,23 @@ class GateFilter:
     
     def _build_qualification_index(self):
         """构建资质索引，支持模糊匹配"""
-        company_quals = self.company.get('qualifications', [])
+        company_quals = list(self.company.get('qualifications', []) or [])
+        company_quals.extend([
+            asset.get("name", "")
+            for asset in self.company.get("assets", [])
+            if asset.get("asset_type") == "qualification" and asset.get("status") == "有效" and not asset.get("is_deleted")
+        ])
         self.qual_index: Set[str] = set()
         
         for qual in company_quals:
+            if not qual:
+                continue
+            normalized = QualificationMapping.normalize(qual)
             self.qual_index.add(qual.lower())
             self.qual_index.add(qual.upper())
             self.qual_index.add(qual)
+            self.qual_index.add(normalized)
+            self.qual_index.add(normalized.lower())
         
         self.qual_aliases = {
             '等保三级': ['信息安全等级保护三级', '等保三级认证', '三级等保'],
@@ -112,10 +125,13 @@ class GateFilter:
     
     def _has_qualification(self, required_qual: str) -> bool:
         """检查是否具备某资质"""
+        required_standard = QualificationMapping.normalize(required_qual)
         required_lower = required_qual.lower()
         required_upper = required_qual.upper()
         
         if required_qual in self.qual_index:
+            return True
+        if required_standard in self.qual_index or required_standard.lower() in self.qual_index:
             return True
         if required_lower in self.qual_index:
             return True
@@ -132,12 +148,28 @@ class GateFilter:
                     if required_qual in alias or alias in required_qual:
                         return True
         
-        company_quals = self.company.get('qualifications', [])
+        company_quals = list(self.company.get('qualifications', []) or [])
+        company_quals.extend([
+            asset.get("name", "")
+            for asset in self.company.get("assets", [])
+            if asset.get("asset_type") == "qualification" and asset.get("status") == "有效" and not asset.get("is_deleted")
+        ])
         for qual in company_quals:
+            if not qual:
+                continue
+            if QualificationMapping.is_equivalent(required_qual, qual):
+                return True
+            if self._same_cmmi_level(required_qual, qual):
+                return True
             if required_qual in qual or qual in required_qual:
                 return True
         
         return False
+
+    def _same_cmmi_level(self, required_qual: str, owned_qual: str) -> bool:
+        required_match = re.search(r"cmmi\D*(\d)", required_qual, re.IGNORECASE)
+        owned_match = re.search(r"cmmi\D*(\d)", owned_qual, re.IGNORECASE)
+        return bool(required_match and owned_match and required_match.group(1) == owned_match.group(1))
     
     def _check_region(self, tender_info: Dict[str, Any]) -> GateCheck:
         """检查地域门槛"""

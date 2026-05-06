@@ -14,6 +14,7 @@ class AnalysisResult(SQLModel, table=True):
     match_score: float = Field(default=0.0)
     match_grade: str = Field(default="D")
     recommendation: str = Field(default="")
+    matching_details: Optional[str] = None
     
     decision_action: str = Field(default="评估后决定")
     decision_reason: Optional[str] = None

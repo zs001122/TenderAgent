@@ -1,5 +1,6 @@
 from typing import Dict, Any, List, Optional
 from dataclasses import dataclass
+import re
 
 
 @dataclass
@@ -21,6 +22,7 @@ class RankingResult:
     recommendation: str
     confidence: float
     reasons: List[str]
+    evidence_matches: List[Dict[str, Any]] = None
 
 
 class RankingEngine:
@@ -34,10 +36,11 @@ class RankingEngine:
     """
     
     DEFAULT_WEIGHTS = {
-        'experience': 0.30,
-        'budget': 0.25,
-        'history': 0.25,
-        'competition': 0.20,
+        'experience': 0.25,
+        'budget': 0.20,
+        'history': 0.20,
+        'competition': 0.15,
+        'evidence': 0.20,
     }
     
     def __init__(self, company_profile: Dict[str, Any], weights: Dict[str, float] = None):
@@ -95,6 +98,16 @@ class RankingEngine:
         )
         if comp_reason:
             reasons.append(comp_reason)
+
+        evidence_score, evidence_reason, evidence_matches = self._score_evidence(tender_info)
+        dimension_scores['evidence'] = DimensionScore(
+            name='资料证据',
+            score=evidence_score,
+            weight=self.weights.get('evidence', 0.0),
+            details=evidence_reason
+        )
+        if evidence_reason:
+            reasons.append(evidence_reason)
         
         total_score = sum(
             dimension_scores[k].score * dimension_scores[k].weight
@@ -111,7 +124,8 @@ class RankingEngine:
             dimension_scores=dimension_scores,
             recommendation=recommendation,
             confidence=confidence,
-            reasons=reasons
+            reasons=reasons,
+            evidence_matches=evidence_matches,
         )
     
     def _score_experience(self, tender_info: Dict[str, Any]) -> tuple:
@@ -201,6 +215,61 @@ class RankingEngine:
         score = base_rate * 100
         
         return round(score, 2), f"历史中标率: {base_rate*100:.1f}% ({won_count}/{total_count})"
+
+    def _score_evidence(self, tender_info: Dict[str, Any]) -> tuple:
+        """基于导入资料库的软著、专利、业绩、人员证书打分。"""
+        assets = [asset for asset in (self.company.get("assets", []) or []) if not asset.get("is_deleted")]
+        if not assets:
+            return 50.0, "未导入结构化公司资料", []
+
+        tender_terms = self._tender_terms(tender_info)
+        if not tender_terms:
+            return 50.0, "招标关键词不足，资料证据待核实", []
+
+        matches = []
+        evidence_matches: List[Dict[str, Any]] = []
+        weights = {
+            "project_case": 28,
+            "software_copyright": 18,
+            "patent_granted": 18,
+            "patent_pending": 8,
+            "personnel_certificate": 16,
+            "qualification": 12,
+        }
+
+        score = 35.0
+        for asset in assets:
+            haystack = self._asset_text(asset)
+            hit_terms = [term for term in tender_terms if term and term.lower() in haystack.lower()]
+            if not hit_terms:
+                continue
+            asset_type = asset.get("asset_type", "")
+            status = asset.get("status")
+            multiplier = 1.0 if status in {"有效", "审核中", None, ""} else 0.25
+            score_delta = round(min(weights.get(asset_type, 8), len(set(hit_terms)) * 6) * multiplier, 2)
+            score += score_delta
+            matches.append(f"{asset.get('source_sheet')}: {asset.get('name')}")
+            evidence_matches.append({
+                "dimension": self._asset_dimension(asset_type),
+                "requirement": "、".join(sorted(set(hit_terms))[:5]),
+                "status": "matched" if multiplier >= 1 else "weak",
+                "score_delta": score_delta,
+                "matched_assets": [self._asset_reference(asset)],
+                "reason": f"资料内容命中关键词: {'、'.join(sorted(set(hit_terms))[:5])}",
+            })
+
+        if not matches:
+            return 35.0, "未找到与项目关键词直接相关的公司资料证据", [{
+                "dimension": "资料证据",
+                "requirement": "项目关键词",
+                "status": "missing",
+                "score_delta": 0,
+                "matched_assets": [],
+                "reason": "未找到与项目关键词直接相关的公司资料证据",
+            }]
+
+        score = max(0.0, min(100.0, score))
+        return round(score, 2), "命中资料证据: " + "；".join(matches[:5]), evidence_matches[:20]
     
     def _score_competition(self, tender_info: Dict[str, Any]) -> tuple:
         """竞争程度评分（分数越高竞争越小）"""
@@ -236,6 +305,68 @@ class RankingEngine:
         score = max(0, min(100, score))
         
         return score, "; ".join(reasons) if reasons else "竞争程度中等"
+
+    def _tender_terms(self, tender_info: Dict[str, Any]) -> List[str]:
+        terms = []
+        for key in ("title", "project_type", "content", "region"):
+            value = tender_info.get(key)
+            if value:
+                terms.extend(self._split_terms(str(value)))
+        for key in ("tags", "qualifications"):
+            value = tender_info.get(key) or []
+            if isinstance(value, list):
+                for item in value:
+                    terms.extend(self._split_terms(str(item)))
+        stopwords = {"项目", "招标", "采购", "服务", "建设", "系统", "平台", "公告"}
+        result = []
+        for term in terms:
+            clean = term.strip()
+            if len(clean) >= 2 and clean not in stopwords and clean not in result:
+                result.append(clean)
+        return result[:40]
+
+    def _split_terms(self, text: str) -> List[str]:
+        parts = [p for p in re.split(r"[\s,，。；;、（）()：:《》/\\-]+", text) if p]
+        important = []
+        for token in ["AI", "人工智能", "大模型", "大数据", "数据治理", "数据安全", "软件开发", "运维", "通信", "信创", "等保"]:
+            if token.lower() in text.lower():
+                important.append(token)
+        return important + parts
+
+    def _asset_text(self, asset: Dict[str, Any]) -> str:
+        values = [
+            asset.get("name", ""),
+            asset.get("category", ""),
+            asset.get("issuer", ""),
+            " ".join(asset.get("keywords", []) or []),
+        ]
+        data = asset.get("data") or {}
+        if isinstance(data, dict):
+            values.extend(str(v) for v in data.values() if v is not None)
+        return " ".join(str(value).strip() for value in values if value and str(value).strip())
+
+    def _asset_dimension(self, asset_type: str) -> str:
+        labels = {
+            "project_case": "业绩证据",
+            "software_copyright": "软著证据",
+            "patent_granted": "专利证据",
+            "patent_pending": "专利证据",
+            "personnel_certificate": "人员证书",
+            "qualification": "资质证据",
+        }
+        return labels.get(asset_type, "资料证据")
+
+    def _asset_reference(self, asset: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            "id": asset.get("id"),
+            "name": asset.get("name"),
+            "asset_type": asset.get("asset_type"),
+            "source_sheet": asset.get("source_sheet"),
+            "status": asset.get("status"),
+            "certificate_no": asset.get("certificate_no"),
+            "expiry_date": asset.get("expiry_date"),
+            "source_type": asset.get("source_type"),
+        }
     
     def _get_grade(self, score: float) -> str:
         """获取等级"""

@@ -15,6 +15,7 @@ import {
   message,
   Typography,
   Divider,
+  Empty,
 } from 'antd'
 import {
   CheckCircleOutlined,
@@ -23,7 +24,7 @@ import {
   TrophyOutlined,
   RobotOutlined,
 } from '@ant-design/icons'
-import type { FullAnalysisResult, GateCheck, MatchGrade } from '../types/tender'
+import type { EvidenceMatch, FullAnalysisResult, GateCheck, MatchGrade } from '../types/tender'
 import { analyzeTender, getTenderAnalysis } from '../services/tender'
 import { recordBidFeedback, updateBidResult } from '../services/feedback'
 
@@ -245,6 +246,8 @@ const AnalysisDetailModal: React.FC<AnalysisDetailModalProps> = ({
       return '#ff4d4f'
     }
 
+    const dimensionScores = matching.details?.dimension_scores || {}
+
     return (
       <Card
         title={
@@ -277,8 +280,92 @@ const AnalysisDetailModal: React.FC<AnalysisDetailModalProps> = ({
               </Tag>
             </div>
           </div>
+          {Object.keys(dimensionScores).length > 0 && (
+            <List
+              dataSource={Object.entries(dimensionScores)}
+              renderItem={([key, item]) => (
+                <List.Item key={key}>
+                  <Space direction="vertical" style={{ width: '100%' }} size={4}>
+                    <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                      <Text strong>{item.name}</Text>
+                      <Text>{item.score.toFixed(1)} 分 / 权重 {(item.weight * 100).toFixed(0)}%</Text>
+                    </Space>
+                    <Progress percent={item.score} size="small" strokeColor={getScoreColor(item.score)} />
+                    <Text type="secondary">{item.details}</Text>
+                  </Space>
+                </List.Item>
+              )}
+            />
+          )}
         </Space>
       </Card>
+    )
+  }
+
+  const renderEvidenceStatus = (status: EvidenceMatch['status']) => {
+    const config: Record<string, { color: string; text: string }> = {
+      matched: { color: 'success', text: '命中' },
+      missing: { color: 'error', text: '缺失' },
+      review: { color: 'warning', text: '待复核' },
+      weak: { color: 'warning', text: '弱命中' },
+    }
+    const item = config[String(status)] || { color: 'default', text: String(status || '未知') }
+    return <Tag color={item.color}>{item.text}</Tag>
+  }
+
+  const renderEvidenceSection = () => {
+    const details = data?.matching?.details
+    if (!details) {
+      return (
+        <Card title="匹配证据">
+          <Empty description="当前分析结果暂无结构化证据链，请重新分析该招标" />
+        </Card>
+      )
+    }
+
+    const evidence = [...(details.gate_evidence || []), ...(details.evidence_matches || [])]
+
+    return (
+      <Space direction="vertical" style={{ width: '100%' }} size="middle">
+        <Card title="证据概览">
+          <Space wrap>
+            <Tag color="success">命中 {evidence.filter((item) => item.status === 'matched').length}</Tag>
+            <Tag color="error">缺失 {(details.missing_items || []).length}</Tag>
+            <Tag color="warning">风险/复核 {(details.risk_items || []).length}</Tag>
+          </Space>
+        </Card>
+        <Card title="命中与缺失证据">
+          <List
+            dataSource={evidence}
+            locale={{ emptyText: '暂无证据项' }}
+            renderItem={(item) => (
+              <List.Item>
+                <Space direction="vertical" style={{ width: '100%' }} size={6}>
+                  <Space style={{ width: '100%', justifyContent: 'space-between' }}>
+                    <Space>
+                      {renderEvidenceStatus(item.status)}
+                      <Text strong>{item.dimension}</Text>
+                      {item.is_mandatory && <Tag color="red">必须</Tag>}
+                    </Space>
+                    {item.score_delta ? <Text type="secondary">+{item.score_delta}</Text> : null}
+                  </Space>
+                  <Text>{item.requirement || '-'}</Text>
+                  <Text type="secondary">{item.reason}</Text>
+                  {!!item.matched_assets?.length && (
+                    <Space wrap>
+                      {item.matched_assets.map((asset, index) => (
+                        <Tag key={`${asset.name}-${index}`} color="blue">
+                          {asset.source_sheet} / {asset.name}
+                        </Tag>
+                      ))}
+                    </Space>
+                  )}
+                </Space>
+              </List.Item>
+            )}
+          />
+        </Card>
+      </Space>
     )
   }
 
@@ -459,6 +546,7 @@ const AnalysisDetailModal: React.FC<AnalysisDetailModalProps> = ({
               { key: 'extraction', label: '提取信息', children: renderExtractionSection() },
               { key: 'gate', label: 'Gate校验', children: renderGateSection() },
               { key: 'ranking', label: '评分详情', children: renderRankingSection() },
+              { key: 'evidence', label: '匹配证据', children: renderEvidenceSection() },
               { key: 'decision', label: '决策建议', children: renderDecisionSection() },
               { key: 'feedback', label: '反馈闭环', children: renderFeedbackSection() },
             ]}

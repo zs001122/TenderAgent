@@ -1,6 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 from typing import List, Any, Dict, Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from app.db.repository import get_repository, TenderRepository, get_company_repository, CompanyRepository
 from app.db.session import get_session
@@ -11,10 +11,9 @@ router = APIRouter()
 
 
 class AnalyzeRequest(BaseModel):
-    tender_ids: List[int] = Field(default_factory=list, alias="tenderIds")
+    model_config = ConfigDict(populate_by_name=True)
 
-    class Config:
-        allow_population_by_field_name = True
+    tender_ids: List[int] = Field(default_factory=list, alias="tenderIds")
 
 
 class BatchAnalyzeResponse(BaseModel):

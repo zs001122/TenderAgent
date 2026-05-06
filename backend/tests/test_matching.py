@@ -106,6 +106,28 @@ class TestRankingEngine:
         
         assert 'budget' in result.dimension_scores
 
+    def test_asset_evidence_ignores_empty_asset_fields(self, sample_company_profile):
+        sample_company_profile["assets"] = [
+            {
+                "asset_type": "project_case",
+                "name": "Data governance platform",
+                "category": None,
+                "issuer": None,
+                "keywords": ["data", "governance"],
+                "data": {"summary": None, "scope": "platform delivery"},
+            }
+        ]
+        ranking_engine = RankingEngine(sample_company_profile)
+
+        result = ranking_engine.calculate_score({
+            "title": "Data governance platform",
+            "tags": ["data", "governance"],
+            "content": "platform delivery",
+            "budget": 500,
+        })
+
+        assert result.dimension_scores["evidence"].score > 0
+
 
 class TestMatchingEngine:
     """匹配引擎集成测试"""
@@ -118,6 +140,33 @@ class TestMatchingEngine:
         assert result.pass_gate == True
         assert result.score > 0
         assert result.recommendation in ['强烈推荐', '推荐', '观望', '不推荐']
+
+    def test_match_uses_imported_asset_evidence(self, sample_company_profile, sample_tender_info):
+        sample_company_profile["assets"] = [
+            {
+                "asset_type": "qualification",
+                "source_sheet": "专业资质认证",
+                "name": "CMMI-Level 5",
+                "status": "有效",
+                "keywords": [],
+                "data": {},
+            },
+            {
+                "asset_type": "project_case",
+                "source_sheet": "业绩",
+                "name": "大数据平台开发服务合同",
+                "status": "有效",
+                "keywords": ["大数据", "软件开发"],
+                "data": {"合同摘要": "大数据平台开发、数据治理"},
+            },
+        ]
+        sample_tender_info["qualifications"] = ["CMMI5"]
+
+        result = MatchingEngine(sample_company_profile).match(sample_tender_info)
+
+        assert result.pass_gate is True
+        assert "evidence" in result.details["dimension_scores"]
+        assert result.details["dimension_scores"]["evidence"]["score"] > 50
 
     def test_match_fail_gate(self, sample_company_profile):
         engine = MatchingEngine(sample_company_profile)

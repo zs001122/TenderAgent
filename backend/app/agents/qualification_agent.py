@@ -18,7 +18,14 @@ class QualificationAgent(BaseAgent):
     
     def analyze(self, tender_info: Dict[str, Any], company_profile: Dict[str, Any]) -> AgentResult:
         required_quals = self._get_required_qualifications(tender_info)
+        required_quals = [str(qual).strip() for qual in required_quals if qual and str(qual).strip()]
         company_quals = set(company_profile.get('qualifications', []))
+        company_quals.update(
+            asset.get("name", "")
+            for asset in company_profile.get("assets", [])
+            if asset.get("asset_type") == "qualification" and asset.get("status") == "有效" and not asset.get("is_deleted")
+        )
+        company_quals = {str(qual).strip() for qual in company_quals if qual and str(qual).strip()}
         
         matched = []
         missing = []

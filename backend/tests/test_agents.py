@@ -38,6 +38,34 @@ class TestQualificationAgent:
         
         assert result.analysis.get('pass') == True
 
+    def test_analyze_ignores_empty_qualification_values(self, sample_company_profile):
+        tender = {
+            'title': 'API smoke tender',
+            'qualifications': ['CMMI3', None, ''],
+        }
+        company_profile = {
+            **sample_company_profile,
+            'assets': [
+                {
+                    'asset_type': 'qualification',
+                    'status': '鏈夋晥',
+                    'name': None,
+                    'is_deleted': False,
+                },
+                {
+                    'asset_type': 'qualification',
+                    'status': '鏈夋晥',
+                    'name': 'CMMI3',
+                    'is_deleted': False,
+                },
+            ],
+        }
+
+        result = self.agent.analyze(tender, company_profile)
+
+        assert result.analysis.get('pass') == True
+        assert result.analysis.get('required_qualifications') == ['CMMI3']
+
 
 class TestRiskAgent:
     """风险评估 Agent 测试"""

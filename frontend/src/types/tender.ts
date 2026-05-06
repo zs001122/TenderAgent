@@ -113,6 +113,42 @@ export interface MatchingInfo {
   grade: MatchGrade
   recommendation: string
   gate_checks: GateCheck[]
+  details?: MatchingDetails
+}
+
+export interface EvidenceAssetRef {
+  id?: number
+  name?: string
+  asset_type?: string
+  source_sheet?: string
+  status?: string
+  certificate_no?: string
+  expiry_date?: string
+}
+
+export interface EvidenceMatch {
+  dimension: string
+  requirement: string
+  status: 'matched' | 'missing' | 'review' | 'weak' | string
+  score_delta: number
+  matched_assets: EvidenceAssetRef[]
+  reason: string
+  is_mandatory?: boolean
+}
+
+export interface MatchingDimensionScore {
+  name: string
+  score: number
+  weight: number
+  details: string
+}
+
+export interface MatchingDetails {
+  dimension_scores?: Record<string, MatchingDimensionScore>
+  evidence_matches?: EvidenceMatch[]
+  gate_evidence?: EvidenceMatch[]
+  missing_items?: EvidenceMatch[]
+  risk_items?: EvidenceMatch[]
 }
 
 export interface DecisionInfo {

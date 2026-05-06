@@ -25,7 +25,7 @@ class TestRoughExtractor:
         assert result['budget'][0]['value'] == 580.0
 
     def test_extract_deadline(self):
-        content = "投标截止时间：2026年4月15日17:00"
+        content = "投标截止时间：2026年6月15日17:00"
         result = self.extractor.extract(content)
         assert len(result['deadline']) > 0
         assert result['deadline'][0]['value'].year == 2026

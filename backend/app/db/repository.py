@@ -6,7 +6,7 @@ import json
 from app.models.tender import Tender, CrawlLog
 from app.models.analysis import AnalysisResult
 from app.models.analysis_trace import AnalysisTrace
-from app.models.company import CompanyProfile
+from app.models.company import CompanyProfile, CompanyAsset
 
 
 class TenderRepository:
@@ -350,6 +350,7 @@ class TenderRepository:
             "match_score": analysis.match_score,
             "match_grade": analysis.match_grade,
             "recommendation": analysis.recommendation,
+            "matching_details": json.loads(analysis.matching_details) if analysis.matching_details else {},
             "decision_action": analysis.decision_action,
             "decision_reason": analysis.decision_reason,
             "decision_confidence": analysis.decision_confidence,
@@ -370,8 +371,11 @@ class CompanyRepository:
     def get_profile_dict(self) -> Dict:
         profile = self.get_active_profile()
         if not profile:
-            return self._default_profile()
-        return {
+            result = self._default_profile()
+            result["asset_summary"] = self.get_asset_summary()
+            result["assets"] = self.get_assets(limit=500)
+            return result
+        result = {
             "name": profile.name,
             "target_domains": json.loads(profile.target_domains) if profile.target_domains else [],
             "budget_range": [profile.budget_range_min or 50, profile.budget_range_max or 1000],
@@ -379,6 +383,9 @@ class CompanyRepository:
             "service_regions": json.loads(profile.service_regions) if profile.service_regions else [],
             "bid_history": json.loads(profile.bid_history) if profile.bid_history else [],
         }
+        result["asset_summary"] = self.get_asset_summary()
+        result["assets"] = self.get_assets(limit=500)
+        return result
 
     def save_profile(self, profile_data: Dict) -> CompanyProfile:
         profile = self.get_active_profile()
@@ -398,6 +405,295 @@ class CompanyRepository:
         self.session.commit()
         self.session.refresh(profile)
         return profile
+
+    def replace_assets(self, assets: List[Dict[str, Any]]) -> Dict[str, Any]:
+        existing = self.session.exec(select(CompanyAsset).where(CompanyAsset.is_deleted == False)).all()
+        for item in existing:
+            self.session.delete(item)
+
+        for item in assets:
+            asset = CompanyAsset(
+                company_name=item.get("company_name", ""),
+                asset_type=item.get("asset_type", ""),
+                source_sheet=item.get("source_sheet", ""),
+                name=item.get("name", ""),
+                category=item.get("category"),
+                certificate_no=item.get("certificate_no"),
+                issuer=item.get("issuer"),
+                issue_date=item.get("issue_date"),
+                expiry_date=item.get("expiry_date"),
+                status=item.get("status"),
+                amount_wanyuan=item.get("amount_wanyuan"),
+                keywords=item.get("keywords"),
+                data_json=json.dumps(item.get("data", {}), ensure_ascii=False),
+                import_batch_id=item.get("import_batch_id"),
+                source_type=item.get("source_type", "excel_import"),
+                updated_at=datetime.utcnow(),
+            )
+            self.session.add(asset)
+        self.session.commit()
+        return self.get_asset_summary()
+
+    def create_asset(self, asset_data: Dict[str, Any]) -> Dict[str, Any]:
+        asset = CompanyAsset()
+        self._apply_asset_data(asset, asset_data, default_source_type="manual")
+        self.session.add(asset)
+        self.session.commit()
+        self.session.refresh(asset)
+        return self._asset_to_dict(asset)
+
+    def update_asset(self, asset_id: int, asset_data: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        asset = self.session.get(CompanyAsset, asset_id)
+        if not asset:
+            return None
+        self._apply_asset_data(asset, asset_data, default_source_type="manual_edit")
+        if asset.source_type == "excel_import":
+            asset.source_type = "manual_edit"
+        self.session.add(asset)
+        self.session.commit()
+        self.session.refresh(asset)
+        return self._asset_to_dict(asset)
+
+    def soft_delete_asset(self, asset_id: int, reason: str = "") -> Optional[Dict[str, Any]]:
+        asset = self.session.get(CompanyAsset, asset_id)
+        if not asset:
+            return None
+        asset.is_deleted = True
+        asset.deleted_at = datetime.utcnow()
+        asset.deleted_reason = reason or None
+        asset.updated_at = datetime.utcnow()
+        self.session.add(asset)
+        self.session.commit()
+        self.session.refresh(asset)
+        return self._asset_to_dict(asset)
+
+    def restore_asset(self, asset_id: int) -> Optional[Dict[str, Any]]:
+        asset = self.session.get(CompanyAsset, asset_id)
+        if not asset:
+            return None
+        asset.is_deleted = False
+        asset.deleted_at = None
+        asset.deleted_reason = None
+        asset.updated_at = datetime.utcnow()
+        self.session.add(asset)
+        self.session.commit()
+        self.session.refresh(asset)
+        return self._asset_to_dict(asset)
+
+    def get_assets(
+        self,
+        asset_type: Optional[str] = None,
+        status: Optional[str] = None,
+        source_sheet: Optional[str] = None,
+        keyword: Optional[str] = None,
+        include_deleted: bool = False,
+        skip: int = 0,
+        limit: int = 200,
+    ) -> List[Dict[str, Any]]:
+        statement = select(CompanyAsset)
+        if not include_deleted:
+            statement = statement.where(CompanyAsset.is_deleted == False)
+        if asset_type:
+            statement = statement.where(CompanyAsset.asset_type == asset_type)
+        if status:
+            statement = statement.where(CompanyAsset.status == status)
+        if source_sheet:
+            statement = statement.where(CompanyAsset.source_sheet == source_sheet)
+        if keyword:
+            like_value = f"%{keyword}%"
+            statement = statement.where(
+                or_(
+                    CompanyAsset.name.like(like_value),
+                    CompanyAsset.category.like(like_value),
+                    CompanyAsset.certificate_no.like(like_value),
+                    CompanyAsset.issuer.like(like_value),
+                    CompanyAsset.keywords.like(like_value),
+                    CompanyAsset.data_json.like(like_value),
+                )
+            )
+        statement = statement.order_by(CompanyAsset.asset_type, CompanyAsset.id).offset(skip).limit(limit)
+        return [self._asset_to_dict(item) for item in self.session.exec(statement).all()]
+
+    def count_assets(
+        self,
+        asset_type: Optional[str] = None,
+        status: Optional[str] = None,
+        source_sheet: Optional[str] = None,
+        keyword: Optional[str] = None,
+        include_deleted: bool = False,
+    ) -> int:
+        statement = select(func.count(CompanyAsset.id))
+        if not include_deleted:
+            statement = statement.where(CompanyAsset.is_deleted == False)
+        if asset_type:
+            statement = statement.where(CompanyAsset.asset_type == asset_type)
+        if status:
+            statement = statement.where(CompanyAsset.status == status)
+        if source_sheet:
+            statement = statement.where(CompanyAsset.source_sheet == source_sheet)
+        if keyword:
+            like_value = f"%{keyword}%"
+            statement = statement.where(
+                or_(
+                    CompanyAsset.name.like(like_value),
+                    CompanyAsset.category.like(like_value),
+                    CompanyAsset.certificate_no.like(like_value),
+                    CompanyAsset.issuer.like(like_value),
+                    CompanyAsset.keywords.like(like_value),
+                    CompanyAsset.data_json.like(like_value),
+                )
+            )
+        return int(self.session.exec(statement).one() or 0)
+
+    def get_asset_summary(self) -> Dict[str, Any]:
+        assets = self.session.exec(select(CompanyAsset).where(CompanyAsset.is_deleted == False)).all()
+        by_type: Dict[str, int] = {}
+        by_sheet: Dict[str, int] = {}
+        expired_count = 0
+        expiring_soon_count = 0
+        top_qualifications: List[str] = []
+        now = datetime.utcnow()
+        soon = now + timedelta(days=180)
+
+        for asset in assets:
+            by_type[asset.asset_type] = by_type.get(asset.asset_type, 0) + 1
+            by_sheet[asset.source_sheet] = by_sheet.get(asset.source_sheet, 0) + 1
+            if asset.status == "过期":
+                expired_count += 1
+            if asset.status == "有效" and asset.expiry_date and asset.expiry_date <= soon:
+                expiring_soon_count += 1
+            if asset.asset_type == "qualification" and asset.status == "有效" and len(top_qualifications) < 20:
+                top_qualifications.append(asset.name)
+
+        return {
+            "total_assets": len(assets),
+            "by_type": by_type,
+            "by_sheet": by_sheet,
+            "by_status": self._count_by_status(assets),
+            "valid_qualification_count": len([
+                a for a in assets if a.asset_type == "qualification" and a.status == "有效"
+            ]),
+            "expired_count": expired_count,
+            "expiring_soon_count": expiring_soon_count,
+            "top_qualifications": top_qualifications,
+        }
+
+    def _count_by_status(self, assets: List[CompanyAsset]) -> Dict[str, int]:
+        result: Dict[str, int] = {}
+        for asset in assets:
+            key = asset.status or "未知"
+            result[key] = result.get(key, 0) + 1
+        return result
+
+    def sync_profile_from_assets(self, company_name: str = "") -> CompanyProfile:
+        profile = self.get_active_profile()
+        current = self.get_profile_dict() if profile else self._default_profile()
+        assets = self.get_assets(limit=1000)
+        qualification_names = [
+            asset["name"] for asset in assets
+            if asset["asset_type"] == "qualification" and asset.get("status") == "有效"
+        ]
+        domains = set(current.get("target_domains") or [])
+        for asset in assets:
+            for keyword in asset.get("keywords", []):
+                if keyword == "安全/信创":
+                    domains.add("安全/等保")
+                elif keyword in {"AI/人工智能", "大数据", "软件开发", "通信/网络", "运维/服务"}:
+                    domains.add(keyword)
+        merged = {
+            **current,
+            "name": company_name or current.get("name") or "默认公司",
+            "target_domains": sorted(domains),
+            "qualifications": sorted(set(current.get("qualifications", []) + qualification_names)),
+        }
+        return self.save_profile(merged)
+
+    def _asset_to_dict(self, asset: CompanyAsset) -> Dict[str, Any]:
+        return {
+            "id": asset.id,
+            "company_name": asset.company_name,
+            "asset_type": asset.asset_type,
+            "source_sheet": asset.source_sheet,
+            "name": asset.name,
+            "category": asset.category,
+            "certificate_no": asset.certificate_no,
+            "issuer": asset.issuer,
+            "issue_date": asset.issue_date.strftime("%Y-%m-%d") if asset.issue_date else None,
+            "expiry_date": asset.expiry_date.strftime("%Y-%m-%d") if asset.expiry_date else None,
+            "status": asset.status,
+            "amount_wanyuan": asset.amount_wanyuan,
+            "keywords": json.loads(asset.keywords) if asset.keywords else [],
+            "data": json.loads(asset.data_json) if asset.data_json else {},
+            "import_batch_id": asset.import_batch_id,
+            "source_type": asset.source_type,
+            "is_deleted": asset.is_deleted,
+            "deleted_at": asset.deleted_at.strftime("%Y-%m-%d %H:%M:%S") if asset.deleted_at else None,
+            "deleted_reason": asset.deleted_reason,
+        }
+
+    def _apply_asset_data(self, asset: CompanyAsset, data: Dict[str, Any], default_source_type: str) -> None:
+        now = datetime.utcnow()
+        asset.company_name = str(data.get("company_name", asset.company_name or "") or "")
+        asset.asset_type = str(data.get("asset_type", asset.asset_type or "") or "")
+        asset.source_sheet = str(data.get("source_sheet", asset.source_sheet or "手工维护") or "手工维护")
+        asset.name = str(data.get("name", asset.name or "") or "")
+        asset.category = data.get("category", asset.category)
+        asset.certificate_no = data.get("certificate_no", asset.certificate_no)
+        asset.issuer = data.get("issuer", asset.issuer)
+        asset.issue_date = self._coerce_datetime(data.get("issue_date", asset.issue_date))
+        asset.expiry_date = self._coerce_datetime(data.get("expiry_date", asset.expiry_date))
+        asset.status = data.get("status", asset.status or "有效")
+        asset.amount_wanyuan = self._coerce_float(data.get("amount_wanyuan", asset.amount_wanyuan))
+        asset.keywords = self._encode_keywords(data.get("keywords", asset.keywords))
+        raw_data = data.get("data", None)
+        if raw_data is not None:
+            asset.data_json = json.dumps(raw_data if isinstance(raw_data, dict) else {}, ensure_ascii=False)
+        elif not asset.data_json:
+            asset.data_json = "{}"
+        asset.import_batch_id = data.get("import_batch_id", asset.import_batch_id)
+        if data.get("source_type"):
+            asset.source_type = data["source_type"]
+        elif asset.id is None:
+            asset.source_type = default_source_type
+        elif not asset.source_type:
+            asset.source_type = default_source_type
+        asset.updated_at = now
+        if asset.created_at is None:
+            asset.created_at = now
+
+    def _coerce_datetime(self, value) -> Optional[datetime]:
+        if value in (None, ""):
+            return None
+        if isinstance(value, datetime):
+            return value
+        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%Y-%m-%d %H:%M:%S"):
+            try:
+                return datetime.strptime(str(value), fmt)
+            except ValueError:
+                continue
+        return None
+
+    def _coerce_float(self, value) -> Optional[float]:
+        if value in (None, ""):
+            return None
+        try:
+            return float(value)
+        except (TypeError, ValueError):
+            return None
+
+    def _encode_keywords(self, value) -> str:
+        if value is None:
+            return "[]"
+        if isinstance(value, str):
+            try:
+                parsed = json.loads(value)
+                if isinstance(parsed, list):
+                    return json.dumps([str(item) for item in parsed], ensure_ascii=False)
+            except Exception:
+                return json.dumps([item.strip() for item in value.split(",") if item.strip()], ensure_ascii=False)
+        if isinstance(value, list):
+            return json.dumps([str(item).strip() for item in value if str(item).strip()], ensure_ascii=False)
+        return "[]"
 
     def _default_profile(self) -> Dict:
         return {

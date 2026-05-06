@@ -258,6 +258,7 @@ class PipelineService:
                 "grade": analysis_dict.get("match_grade", "D") if analysis_dict else "D",
                 "recommendation": analysis_dict.get("recommendation", "") if analysis_dict else "",
                 "gate_checks": analysis_dict.get("gate_checks", []) if analysis_dict else [],
+                "details": analysis_dict.get("matching_details", {}) if analysis_dict else {},
             },
             "decision": {
                 "action": analysis_dict.get("decision_action", "评估后决定") if analysis_dict else "评估后决定",
@@ -332,6 +333,7 @@ class PipelineService:
             match_score=match_result.score,
             match_grade=match_result.grade,
             recommendation=match_result.recommendation,
+            matching_details=json.dumps(match_result.details.get("matching_details", {}), ensure_ascii=False),
             decision_action=orchestrator_result.decision.action if orchestrator_result else "评估后决定",
             decision_reason=orchestrator_result.decision.reason if orchestrator_result else None,
             decision_confidence=orchestrator_result.decision.confidence if orchestrator_result else 0.0,
@@ -350,6 +352,7 @@ class PipelineService:
             match_score=0,
             match_grade="D",
             recommendation="不推荐",
+            matching_details=json.dumps({"missing_items": [{"reason": reason}], "evidence_matches": []}, ensure_ascii=False),
             decision_action="不投标",
             decision_reason=reason,
             decision_confidence=1.0,

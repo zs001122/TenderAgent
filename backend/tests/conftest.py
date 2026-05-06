@@ -21,8 +21,8 @@ def sample_tender_content():
     3. 高新技术企业优先
     
     三、投标截止时间
-    投标截止时间：2026年4月15日17:00
-    开标时间：2026年4月16日9:00
+    投标截止时间：2026年6月15日17:00
+    开标时间：2026年6月16日9:00
     
     四、联系方式
     联系人：张经理
@@ -55,7 +55,7 @@ def sample_tender_info():
     return {
         'title': '某市大数据平台建设项目',
         'budget': 580,
-        'deadline': '2026-04-15',
+        'deadline': '2026-06-15',
         'region': '广东省深圳市',
         'qualifications': ['CMMI3', 'ISO27001'],
         'project_type': '软件开发',

@@ -1,9 +1,15 @@
-from pydantic_settings import BaseSettings
+from pydantic_settings import BaseSettings, SettingsConfigDict
 from typing import Optional
 from pathlib import Path
 
 
 class Settings(BaseSettings):
+    model_config = SettingsConfigDict(
+        env_file=str(Path(__file__).resolve().parents[3] / ".env"),
+        env_file_encoding="utf-8",
+        case_sensitive=True,
+    )
+
     DATABASE_URL: str = "sqlite:///./backend/tender.db"
     
     LLM_API_KEY: str = ""
@@ -21,10 +27,5 @@ class Settings(BaseSettings):
     
     WEBHOOK_URL: Optional[str] = None
     
-    class Config:
-        env_file = str(Path(__file__).resolve().parents[3] / ".env")
-        env_file_encoding = "utf-8"
-        case_sensitive = True
-
 
 settings = Settings()
