@@ -45,4 +45,56 @@ jobs:
           python-version: "3.11"
       - name: Check structure and links
         run: |
-          python -c "from pathlib import Path; import re,sys; root=Path('.').resolve(); req=[Path('memory.md'),Path('docs'),Path('docs/plans'),Path('docs/dev-logs'),Path('docs/plans/01_extraction_pipeline.md'),Path('docs/plans/02_matching_engine.md'),Path('docs/plans/03_agent_system.md'),Path('docs/plans/04_feedback_learning.md'),Path('docs/plans/05_knowledge_graph.md'),Path('docs/plans/06_crawler_system.md'),Path('docs/plans/07_frontend_system.md'),Path('.trae'),Path('.trae/documents')]; miss=[str(p) for p in req if not (root/p).exists()]; link=re.compile(r'\\]\\(([^)]+)\\)'); broken=[]; md=[p for p in [root/'memory.md',*root.glob('docs/**/*.md')] if p.exists()]; [broken.append(f'{f.relative_to(root)} -> {m.group(1)}') for f in md for m in link.finditer(f.read_text(encoding='utf-8')) if ('://' not in m.group(1).strip() and not m.group(1).strip().startswith('#') and not m.group(1).strip().startswith('mailto:') and ((lambda u: u and not ((f.parent/u).resolve()).exists())(m.group(1).strip().split('#',1)[0].strip())))]; [print('MISSING\\n- '+'\\n- '.join(miss)) if miss else None, print('BROKEN_LINKS\\n- '+'\\n- '.join(broken)) if broken else None]; sys.exit(1 if miss or broken else 0)"
+          python - <<'PY'
+          from pathlib import Path
+          import re
+          import sys
+
+          root = Path(".").resolve()
+          required = [
+              Path("memory.md"),
+              Path("docs/architecture/project_structure.md"),
+              Path("docs/architecture/database_design_plan.md"),
+              Path("docs/plans/01_extraction_pipeline.md"),
+              Path("docs/plans/02_matching_engine.md"),
+              Path("docs/plans/03_agent_system.md"),
+              Path("docs/plans/04_feedback_learning.md"),
+              Path("docs/plans/05_knowledge_graph.md"),
+              Path("docs/plans/06_crawler_system.md"),
+              Path("docs/plans/07_frontend_system.md"),
+              Path("docs/dev-logs"),
+              Path("docs/archive"),
+              Path(".trae/documents"),
+              Path("scripts/start_mvp.sh"),
+              Path("scripts/start_mvp.ps1"),
+          ]
+          missing = [str(path) for path in required if not (root / path).exists()]
+
+          link_pattern = re.compile(r"\]\(([^)]+)\)")
+          docs_to_check = [
+              root / "memory.md",
+              *root.glob("docs/architecture/**/*.md"),
+              *root.glob("docs/plans/**/*.md"),
+              *root.glob("docs/dev-logs/**/*.md"),
+          ]
+          broken = []
+          for file_path in docs_to_check:
+              if not file_path.exists():
+                  continue
+              content = file_path.read_text(encoding="utf-8")
+              for match in link_pattern.finditer(content):
+                  raw = match.group(1).strip()
+                  if "://" in raw or raw.startswith("#") or raw.startswith("mailto:"):
+                      continue
+                  target = raw.split("#", 1)[0].strip()
+                  if target and not (file_path.parent / target).resolve().exists():
+                      broken.append(f"{file_path.relative_to(root)} -> {raw}")
+
+          if missing:
+              print("MISSING")
+              print("\n".join(f"- {item}" for item in missing))
+          if broken:
+              print("BROKEN_LINKS")
+              print("\n".join(f"- {item}" for item in broken))
+          sys.exit(1 if missing or broken else 0)
+          PY

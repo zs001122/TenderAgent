@@ -1,5 +1,6 @@
 import requests
 import json
+import os
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -7,7 +8,7 @@ import statistics
 from dataclasses import dataclass
 
 # ===================== 配置项 =====================
-OPENROUTER_API_KEY = "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"  # 替换为实际的API密钥
+OPENROUTER_API_KEY = os.getenv("OPENROUTER_API_KEY", "")
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 MODEL = "stepfun/step-3.5-flash:free"
 CONCURRENT_REQUESTS = 5  # 并发请求数
@@ -44,6 +45,15 @@ def count_tokens(text: str) -> int:
 
 def make_api_call():
     """执行单次API调用（包含两次请求），并计算Token相关指标"""
+    if not OPENROUTER_API_KEY:
+        return RequestResult(
+            success=False,
+            response_time=0,
+            total_tokens=0,
+            token_speed=0,
+            error="OPENROUTER_API_KEY is not set",
+        )
+
     start_time = time.time()
     total_output_text = ""  # 存储两次请求的所有输出内容
     
