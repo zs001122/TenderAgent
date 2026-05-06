@@ -1,10 +1,81 @@
-# 数据库设计与每日增量更新方案
+# 数据库设计与当前实现状态
+
+> 最近更新：2026-05-06
+> 当前实现：本地 MVP 使用 SQLite + SQLModel；PostgreSQL/Alembic 仍是后续部署演进方向。
+
+## 0. 当前实现摘要
+
+当前仓库已经落地的数据库能力：
+
+- `tenders`：招标公告主体表。
+- `analysis_results`：分析结果表，已新增 `matching_details` 用于保存结构化匹配证据。
+- `company_profiles`：公司画像表。
+- `company_assets`：结构化公司资料表，用于承载 Excel 多 Sheet 导入和手工维护资料。
+- `bid_records` / `feedback_analysis`：反馈学习相关表。
+- `analysis_traces`：分析链路调试/观测表。
+
+当前兼容策略：
+
+- 新库通过 `SQLModel.metadata.create_all()` 建表。
+- 旧 SQLite 库通过启动时轻量补列逻辑增加：
+  - `analysis_results.matching_details`
+  - `company_assets.source_type`
+  - `company_assets.is_deleted`
+  - `company_assets.deleted_at`
+  - `company_assets.deleted_reason`
+- 正式 Alembic 迁移尚未建立，是后续部署化工作。
+
+## 0.1 公司资料与证据链表
+
+### `company_assets`
+
+| 字段 | 说明 |
+| :--- | :--- |
+| `id` | 主键 |
+| `company_name` | 资料所属公司 |
+| `asset_type` | 资料类型：资质、软著、专利、人员证书、业绩等 |
+| `source_sheet` | Excel 来源 Sheet 或手工维护来源 |
+| `name` | 资料名称 |
+| `category` | 分类 |
+| `certificate_no` | 证书/合同编号 |
+| `issuer` | 发证机构、客户或相关主体 |
+| `issue_date` | 发证/签订日期 |
+| `expiry_date` | 有效期至/结束日期 |
+| `status` | 有效、过期、审核中等状态 |
+| `amount_wanyuan` | 金额，统一换算为万元 |
+| `keywords` | JSON 字符串，资料关键词 |
+| `data` | JSON 字符串，保留原始行数据 |
+| `import_batch` | 导入批次 |
+| `source_type` | `excel_import`、`manual`、`manual_edit` |
+| `is_deleted` | 软删除标记 |
+| `deleted_at` | 停用时间 |
+| `deleted_reason` | 停用原因 |
+
+### `analysis_results.matching_details`
+
+`matching_details` 保存分析当时的匹配证据链，避免历史分析详情随当前资料库变化而漂移。
+
+当前结构：
+
+```json
+{
+  "dimension_scores": {},
+  "gate_evidence": [],
+  "evidence_matches": [],
+  "missing_items": [],
+  "risk_items": []
+}
+```
+
+---
 
 ## 1. 需求分析
 用户希望在第一阶段基础架构搭建中，规划并实施一个支持每日增量更新的数据库方案。数据内容主要为招标公告，涉及网址渠道、公告类型、标题、发布日期等字段。
 
 ## 2. 数据库选型
-考虑到招标公告数据的特性（结构化元数据 + 非结构化全文内容）以及后续的全文检索和分析需求，建议采用 **PostgreSQL**。
+考虑到招标公告数据的特性（结构化元数据 + 非结构化全文内容）以及后续的全文检索和分析需求，部署阶段建议采用 **PostgreSQL**。
+
+当前 MVP 阶段使用 SQLite，便于本地开发、测试和单机演示；PostgreSQL 是后续生产化迁移目标。
 - **PostgreSQL**: 适合存储结构化数据（标题、日期、渠道）和 JSONB 数据（灵活的扩展字段），且具备良好的全文检索能力。
 - **向量数据库 (可选)**: 如果后续需要基于语义搜索相似公告，可以引入 pgvector 插件。
 

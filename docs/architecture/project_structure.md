@@ -1,5 +1,7 @@
 # Project Structure
 
+> Last updated: 2026-05-06
+
 This repository is organized around four active surfaces: backend API, frontend UI, crawler ingestion, and project operations.
 
 ## Active Directories
@@ -26,9 +28,17 @@ This repository is organized around four active surfaces: backend API, frontend 
 
 ## Test Boundaries
 
-- `backend/tests/` is the active backend test suite and is run by CI.
-- Frontend smoke validation is `npm run build` in `frontend/`.
+- `backend/tests/` is the active backend test suite and is run by CI. Current baseline: `64 passed`.
+- Frontend smoke validation is `npm run build` in `frontend/`; the build passes, with a known Vite large chunk warning.
+- Company-data API smoke should use a temporary SQLite database under `.runtime/` so Excel import and CRUD checks do not mutate the default local database.
 - Manual crawler/API experiments belong in `.archive/manual-tests/` unless promoted into a maintained test suite.
+
+## Current Feature Surface
+
+- Company data is maintained through `CompanyAsset` records in `backend/app/models/company.py`.
+- Excel import is preview-confirm: `POST /api/company/import-excel/preview` parses without writing, and `POST /api/company/import-excel` confirms persistence.
+- Company assets support manual create, update, soft delete, restore, and `include_deleted` queries.
+- Matching evidence is persisted in `AnalysisResult.matching_details` and displayed by `frontend/src/components/AnalysisDetailModal.tsx`.
 
 ## Runtime and Generated Files
 
